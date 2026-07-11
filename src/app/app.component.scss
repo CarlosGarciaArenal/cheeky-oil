@@ -1,0 +1,14 @@
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand__logo {
+  display: block;
+  border-radius: 6px;
+}
+
+.brand__name {
+  font-weight: 700;
+}
