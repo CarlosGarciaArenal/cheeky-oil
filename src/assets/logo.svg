@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 600" width="100%" height="100%">
+  <defs>
+    <!-- Gradiente del Fondo -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#12141D" />
+      <stop offset="100%" stop-color="#0B0C10" />
+    </linearGradient>
+
+    <!-- Gradiente de la Chincheta/Gota (Energía y Combustible) -->
+    <linearGradient id="pinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFEA20" /> <!-- Amarillo Brillante -->
+      <stop offset="50%" stop-color="#FF512F" /> <!-- Naranja Fuego -->
+      <stop offset="100%" stop-color="#DD2476" /> <!-- Magenta Moderno -->
+    </linearGradient>
+
+    <!-- Gradiente para el texto "0" -->
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFEA20" />
+      <stop offset="100%" stop-color="#FF512F" />
+    </linearGradient>
+  </defs>
+
+  <!-- Fondo Base de la App -->
+  <rect width="512" height="600" rx="60" fill="url(#bgGrad)" />
+
+  <!-- Anillos de Radar (Simboliza la búsqueda de la gasolinera más cercana) -->
+  <circle cx="256" cy="210" r="170" stroke="#1F2433" stroke-width="4" stroke-dasharray="10 15" fill="none" />
+  <circle cx="256" cy="210" r="230" stroke="#181C28" stroke-width="2" stroke-dasharray="5 20" fill="none" />
+
+  <!-- Sombra base del marcador -->
+  <ellipse cx="256" cy="450" rx="55" ry="18" fill="#000000" opacity="0.7" />
+  <ellipse cx="256" cy="450" rx="25" ry="8" fill="#DD2476" opacity="0.4" />
+
+  <!-- Forma Principal: Híbrido entre Gota de Aceite y Chincheta de Mapa -->
+  <path d="M 256 70
+           C 345 70, 406 135, 406 220
+           C 406 315, 256 435, 256 435
+           C 256 435, 106 315, 106 220
+           C 106 135, 167 70, 256 70 Z"
+        fill="url(#pinGrad)" />
+
+  <!-- Recorte Central -->
+  <circle cx="256" cy="210" r="75" fill="#12141D" />
+
+  <!-- Rostro "Cheeky" (Pícaro) -->
+  <!-- Ojo Izquierdo: Guiño -->
+  <path d="M 215 195 Q 230 180 245 195" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" fill="none"/>
+  
+  <!-- Ojo Derecho: Abierto con un destello -->
+  <circle cx="285" cy="190" r="11" fill="#FFFFFF"/>
+  <circle cx="288" cy="186" r="3" fill="#12141D"/>
+
+  <!-- Sonrisa pícara -->
+  <path d="M 220 230 Q 256 265 295 225" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" fill="none"/>
+  <!-- Detalle del hoyuelo / comisura -->
+  <path d="M 295 225 L 303 214" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Tipografía -->
+  <text x="256" y="520" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="52" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">CH<tspan fill="url(#textGrad)">0</tspan></text>
+  <text x="256" y="555" font-family="system-ui, -apple-system, sans-serif" font-weight="700" font-size="16" fill="#8892B0" text-anchor="middle" letter-spacing="4">CHEEKY OIL</text>
+</svg>

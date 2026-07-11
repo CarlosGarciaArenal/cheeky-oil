@@ -68,3 +68,20 @@ testem.log
 # System files
 .DS_Store
 Thumbs.db
+
+
+# Dependencias y Caché
+node_modules/
+/.angular/
+/www/
+/dist/
+
+# Entornos y Secretos (¡CRÍTICO!)
+.env
+.env.*
+firebase-debug.log
+.firebase/
+
+# Archivos del Sistema Operativo
+.DS_Store
+Thumbs.db
