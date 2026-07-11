@@ -1,0 +1,7 @@
+{
+  "name": "cheeky-oil",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular-standalone"
+}
