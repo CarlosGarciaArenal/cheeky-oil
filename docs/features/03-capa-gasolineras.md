@@ -340,3 +340,86 @@ La sugerencia de añadir la regla de `assets` para `node_modules/leaflet/dist/im
 ### Veredicto
 
 **Aprobado para commit.** Causa raíz identificada con evidencia (no por ensayo y error), corrección mínima y verificada contra el mecanismo real de Leaflet, sin reintroducir dependencias de terceros ni cambios innecesarios en `angular.json`.
+
+---
+
+## Identidad Visual de los Marcadores (naranja de marca + diferenciación usuario/gasolinera)
+
+**Rol:** [UI-DEV]
+**Estado:** Implementado
+**Archivos modificados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/global.scss`
+
+### El problema
+
+El marcador de "tu ubicación" y los marcadores de gasolinera usaban el mismo icono (`L.Icon.Default`, la chincheta azul por defecto de Leaflet), sin relación visual con la marca de la app, y los popups de precio eran el recuadro blanco por defecto de Leaflet.
+
+### Diseño
+
+- **Gasolineras:** icono de chincheta SVG en `#FF512F` ("Naranja Fuego", tomado directamente del gradiente del logo, `src/assets/logo.svg`), con un círculo blanco central. Se crea **una sola vez** como constante de módulo (`STATION_ICON`) y se reutiliza en los hasta 50 marcadores — mismo criterio de no instanciar objetos de más ya aplicado al límite de marcadores.
+- **Tu ubicación:** un punto azul (`#2563EB`), con **forma distinta** (círculo, no chincheta) además de color distinto. La diferencia no depende solo del color — es una decisión de accesibilidad: un usuario con dificultad para distinguir colores (ej. daltonismo rojo-verde/naranja-azul en casos severos) sigue distinguiendo ambos marcadores por la forma.
+- **Popups de gasolinera:** fondo naranja claro (`#FFF4EC` claro / `#2B1C12` oscuro) con texto en tonos tierra/naranja oscuro de alto contraste, aplicado vía la opción `className: 'gas-station-popup'` de `bindPopup` (Leaflet añade esa clase al contenedor `.leaflet-popup`, permitiendo un selector descendiente `.gas-station-popup .leaflet-popup-content-wrapper` sin afectar a otros popups). El popup de "tu ubicación" (`Estás aquí`) se deja con el estilo blanco por defecto de Leaflet, deliberadamente: refuerza la distinción visual con las gasolineras en vez de diluirla.
+- Ambos iconos se implementan con `L.divIcon` (HTML/CSS propio) en vez de `L.Icon` (imágenes PNG): no requiere generar/mantener nuevos assets de imagen, es trivialmente tematizable (un solo string de color) y sigue sin depender de ningún CDN.
+
+### Por qué `title` y no `alt` en las opciones del marcador
+
+`L.Icon.Default`/`L.Icon` renderizan un `<img>`, donde `alt` sí tiene efecto (`img.alt = options.alt`). `L.DivIcon` renderiza un `<div>`, y Leaflet **no** aplica `alt` a nada que no sea una etiqueta `<img>` (ver `Marker._initIcon` en `leaflet-src.js`: `if (icon.tagName === 'IMG') { icon.alt = ... }`). Al cambiar a `L.divIcon`, `alt: '...'` se habría convertido en un no-op silencioso. Se sustituye por `title` (`icon.title = options.title`, que Leaflet aplica siempre, sea `<div>` o `<img>`), que expone el texto como tooltip nativo del navegador al pasar el ratón — la misma información accesible que antes, solo que por el mecanismo correcto para el tipo de icono actual.
+
+### Seguridad del contenido interpolado
+
+- `STATION_MARKER_COLOR`/`USER_MARKER_COLOR` son constantes de módulo (strings fijos, no datos externos) interpoladas en el `html` de los `L.divIcon` — sin riesgo, igual que ya se justificó para `marca`/precios en el popup.
+- `title: \`Gasolinera ${estacion.marca} en ${estacion.municipio}\`` incluye `municipio` (texto libre de la API externa), pero se asigna como **atributo `title` nativo** (`icon.title = ...`, una propiedad DOM de texto plano), no como HTML interpolado — mismo razonamiento de seguridad ya aplicado al atributo `alt` en el ciclo anterior.
+
+---
+
+## Auditoría de Identidad Visual [REVIEWER]
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/global.scss`
+
+### 1. ¿Los marcadores son distinguibles y coherentes con la marca?
+
+- [x] **Color de gasolinera (`#FF512F`) tomado directamente del gradiente del logo** (`src/assets/logo.svg`, parada central `stop-color="#FF512F"`), no un naranja inventado.
+- [x] **Diferenciación por forma además de color** (pin vs. punto): confirmado en el código (`STATION_ICON` usa un `<path>` de chincheta; `USER_ICON` usa un `<span>` circular vía `border-radius: 50%`), no solo un cambio de `fill`.
+- [x] **`STATION_ICON`/`USER_ICON` son constantes de módulo, creadas una sola vez**, reutilizadas en todos los marcadores — no se instancia un `L.DivIcon` nuevo por estación (coherente con el criterio de memoria ya aplicado al límite de 50).
+
+**Veredicto punto 1: correcto.**
+
+### 2. ¿Los colores del popup cumplen contraste accesible (WCAG AA)?
+
+Se calculó el contraste real (fórmula de luminancia relativa WCAG) de cada combinación texto/fondo introducida:
+
+| Elemento | Colores | Contraste | ¿Pasa AA (4.5:1)? |
+|---|---|---|---|
+| Texto del popup (claro) | `#7a2e0e` sobre `#FFF4EC` | 8.72:1 | Sí |
+| Marca/cabecera (claro) | `#c2410c` sobre `#FFF4EC` | 4.78:1 | Sí (justo) |
+| Texto del popup (oscuro) | `#ffd9b8` sobre `#2B1C12` | 12.42:1 | Sí |
+| Marca/cabecera (oscuro) | `#ff8a5b` sobre `#2B1C12` | 7.07:1 | Sí |
+
+- [ ] ⚠️ **Hallazgo detectado y corregido en esta misma auditoría:** el botón de cerrar (×) del popup usa por defecto el color de Leaflet `#757575`, que da **4.26:1** sobre el nuevo fondo naranja claro (`#FFF4EC`) y **3.57:1** sobre el fondo oscuro (`#2B1C12`) — ambos **por debajo** del umbral WCAG AA de 4.5:1 para texto normal (el original, sobre blanco, daba 4.61:1, ya justo). Se añadió un override `.gas-station-popup .leaflet-popup-close-button { color: #7a2e0e; }` (claro) / `#ffd9b8` (oscuro), verificado en **8.72:1** y **12.42:1** respectivamente. Corregido antes de aprobar, no queda como deuda pendiente.
+- [x] **Contraste decorativo (marcador vs. fondo del mapa) no se exige a nivel WCAG de texto**, pero se verificó visualmente coherente: naranja vivo sobre teselas OSM (mayormente claras/beige) y azul sobre el mismo fondo son ambos claramente perceptibles.
+
+**Veredicto punto 2: correcto, tras corregir el contraste del botón de cerrar.**
+
+### 3. ¿Sigue sin depender de APIs/CDN de pago o de terceros?
+
+- [x] Todo el nuevo código es SVG/CSS inline generado por la propia app; no se han añadido nuevas imágenes, fuentes ni referencias a `unpkg`/CDN alguno.
+- [x] El fix de `L.Icon.Default.imagePath` del ciclo anterior se mantiene intacto como fallback defensivo (ya no es la ruta principal, pues ambos marcadores usan `L.DivIcon`, pero no estorba y sigue siendo correcto si se usara `L.Icon.Default` en el futuro).
+
+### 4. ¿Sigue siendo válida la seguridad del contenido interpolado?
+
+- [x] **`title` (no HTML) para el texto que incluye `municipio`** (texto libre de la API): asignación de propiedad DOM de texto plano, no `innerHTML`. Confirmado leyendo `Marker._initIcon` (`icon.title = options.title`, asignación directa, sin parseo de HTML).
+- [x] **Colores interpolados en el `html` de los `L.DivIcon` son constantes fijas del código**, no datos de la API — sin riesgo de inyección.
+
+### 5. Otras comprobaciones
+
+- [x] **`tsc --noEmit`, `npm run lint` y `ng build --configuration development`** ejecutados tras el cambio (incluida la corrección del botón de cerrar): sin errores.
+- [x] **CSS compilado verificado**: se confirmó en `www/styles.css` que las reglas `.gas-station-popup`/`.app-map-icon` y el bloque `@media (prefers-color-scheme: dark)` correspondiente llegan al bundle final.
+- [x] **Sin cambios en Firestore/Cloud Functions ni en el volumen de datos de la API MITECO**: impacto en costes = 0.
+
+### Veredicto final
+
+**Aprobado para commit.** Identidad visual coherente con la marca (naranja del logo), diferenciación usuario/gasolinera por forma y color (no solo color, por accesibilidad), y un problema real de contraste (botón de cerrar del popup) detectado y corregido en la propia auditoría antes de dar el visto bueno.

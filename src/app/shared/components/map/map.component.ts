@@ -48,9 +48,10 @@ function haversineDistanceKm(origen: Coordinates, destino: Coordinates): number 
 }
 
 /**
- * Iconos de marcador servidos como assets propios (`assets/leaflet/`, copiados
- * desde `node_modules/leaflet/dist/images` vía `angular.json`) en lugar de
- * apuntar a una CDN: coste cero y funciona offline/sin depender de terceros.
+ * Fallback defensivo por si algún marcador se crease sin icono explícito
+ * (no ocurre en este componente: tanto el marcador de usuario como los de
+ * gasolinera usan los `L.DivIcon` de abajo). Se mantiene para que
+ * `L.Icon.Default` siga resolviendo correctamente si se usara en el futuro.
  *
  * `Icon.Default._getIconUrl()` calcula la URL final como
  * `(this.options.imagePath || Icon.Default.imagePath) + <nombre de archivo>`
@@ -63,6 +64,47 @@ function haversineDistanceKm(origen: Coordinates, destino: Coordinates): number 
  * anula esa autodetección basada en CSS y usa siempre esta ruta.
  */
 L.Icon.Default.imagePath = 'assets/leaflet/';
+
+/**
+ * Naranja de marca ("Naranja Fuego" del logo, ver `src/assets/logo.svg`)
+ * para diferenciar visualmente las gasolineras de "tu ubicación".
+ */
+const STATION_MARKER_COLOR = '#FF512F';
+/** Azul, deliberadamente distinto del naranja de marca: solo hay un marcador de este tipo en el mapa. */
+const USER_MARKER_COLOR = '#2563EB';
+
+/**
+ * Icono de gasolinera: chincheta (forma "pin") en naranja de marca.
+ * Se crea una única vez (constante de módulo) y se reutiliza en los hasta
+ * 50 marcadores de `renderStations`, en vez de instanciar un `L.DivIcon`
+ * por estación — mismo criterio de minimizar objetos en memoria ya aplicado
+ * al límite de marcadores (ver `docs/features/03-capa-gasolineras.md`).
+ */
+const STATION_ICON = L.divIcon({
+  className: 'app-map-icon app-map-icon--station',
+  html: `
+    <svg width="26" height="36" viewBox="0 0 26 36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+      <path d="M13 0C5.82 0 0 5.82 0 13c0 9.75 13 23 13 23s13-13.25 13-23C26 5.82 20.18 0 13 0z" fill="${STATION_MARKER_COLOR}"/>
+      <circle cx="13" cy="13" r="5.5" fill="#fff"/>
+    </svg>
+  `,
+  iconSize: [26, 36],
+  iconAnchor: [13, 36],
+  popupAnchor: [0, -32],
+});
+
+/**
+ * Icono de "tu ubicación": punto azul (forma de círculo, no de chincheta),
+ * para que la diferencia con las gasolineras no dependa solo del color
+ * (mejor accesibilidad para usuarios con dificultad para distinguir colores).
+ */
+const USER_ICON = L.divIcon({
+  className: 'app-map-icon app-map-icon--user',
+  html: `<span class="app-map-icon__dot" style="background:${USER_MARKER_COLOR}"></span>`,
+  iconSize: [18, 18],
+  iconAnchor: [9, 9],
+  popupAnchor: [0, -12],
+});
 
 /**
  * Mapa base (Leaflet + OpenStreetMap) centrado en la ubicación del usuario.
@@ -154,7 +196,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const latLng: L.LatLngTuple = [coords.lat, coords.lng];
     this.map.setView(latLng, USER_ZOOM);
 
-    this.userMarker = L.marker(latLng, { alt: 'Tu ubicación actual' })
+    this.userMarker = L.marker(latLng, { icon: USER_ICON, title: 'Tu ubicación actual' })
       .addTo(this.map)
       .bindPopup('Estás aquí');
   }
@@ -189,8 +231,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.stationsLayer.clearLayers();
 
     for (const { estacion } of masCercanas) {
-      L.marker([estacion.lat, estacion.lng], { alt: `Gasolinera ${estacion.marca} en ${estacion.municipio}` })
-        .bindPopup(this.buildPopupHtml(estacion))
+      L.marker([estacion.lat, estacion.lng], {
+        icon: STATION_ICON,
+        title: `Gasolinera ${estacion.marca} en ${estacion.municipio}`,
+      })
+        .bindPopup(this.buildPopupHtml(estacion), { className: 'gas-station-popup' })
         .addTo(this.stationsLayer);
     }
   }
@@ -206,7 +251,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const precio = (valor: number | null): string => (valor !== null ? `${valor.toFixed(3)} €` : 'No disponible');
 
     return `
-      <strong>${estacion.marca}</strong>
+      <strong class="gas-station-popup__marca">${estacion.marca}</strong>
       <ul class="gas-station-popup__precios">
         <li>Gasolina 95: ${precio(estacion.precios.gasolina95)}</li>
         <li>Gasolina 98: ${precio(estacion.precios.gasolina98)}</li>

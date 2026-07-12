@@ -44,3 +44,108 @@
  * desalineadas/apiladas en la esquina superior izquierda).
  */
 @import 'leaflet/dist/leaflet.css';
+
+/**
+ * Marcadores e info-popups del mapa (`map.component.ts`)
+ * -----------------------------------------------------
+ * `L.DivIcon`/`bindPopup` inyectan HTML crudo directamente en el DOM, fuera
+ * del árbol de Angular, por lo que la encapsulación de estilos de componente
+ * (`map.component.scss`) no les llega: viven aquí, junto al resto de
+ * overrides globales de Leaflet.
+ */
+.app-map-icon svg {
+  display: block;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
+}
+
+.app-map-icon__dot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+/* Popup de gasolinera: naranja claro, coherente con el naranja de marca de los marcadores. */
+.gas-station-popup .leaflet-popup-content-wrapper {
+  background: #fff4ec;
+  color: #7a2e0e;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.gas-station-popup .leaflet-popup-tip {
+  background: #fff4ec;
+}
+
+.gas-station-popup .leaflet-popup-content {
+  margin: 10px 14px;
+  line-height: 1.4;
+}
+
+/*
+ * El color por defecto del botón de cerrar (#757575) da un contraste de
+ * 4.26:1 sobre nuestro fondo naranja claro (por debajo del umbral WCAG AA
+ * de 4.5:1 para texto normal; con blanco, el fondo original de Leaflet,
+ * daba 4.61:1). Se sobreescribe con el mismo tono que el texto del popup.
+ */
+.gas-station-popup .leaflet-popup-close-button {
+  color: #7a2e0e;
+}
+
+.gas-station-popup .leaflet-popup-close-button:hover,
+.gas-station-popup .leaflet-popup-close-button:focus {
+  color: #5c2209;
+}
+
+.gas-station-popup__marca {
+  display: block;
+  color: #c2410c;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+}
+
+.gas-station-popup__precios {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.gas-station-popup__precios li {
+  padding: 3px 0;
+  border-top: 1px solid rgba(194, 65, 12, 0.15);
+}
+
+.gas-station-popup__precios li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .gas-station-popup .leaflet-popup-content-wrapper,
+  .gas-station-popup .leaflet-popup-tip {
+    background: #2b1c12;
+    color: #ffd9b8;
+  }
+
+  .gas-station-popup__marca {
+    color: #ff8a5b;
+  }
+
+  .gas-station-popup__precios li {
+    border-top-color: rgba(255, 138, 91, 0.25);
+  }
+
+  .gas-station-popup .leaflet-popup-close-button {
+    color: #ffd9b8;
+  }
+
+  .gas-station-popup .leaflet-popup-close-button:hover,
+  .gas-station-popup .leaflet-popup-close-button:focus {
+    color: #ffffff;
+  }
+}
