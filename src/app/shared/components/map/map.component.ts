@@ -6,13 +6,15 @@ import {
   ElementRef,
   OnDestroy,
   ViewChild,
+  effect,
   inject,
   signal,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { IonLabel, IonSegment, IonSegmentButton, SegmentCustomEvent } from '@ionic/angular/standalone';
 import * as L from 'leaflet';
 
-import { GasStation } from '../../../core/models/gas-station.model';
+import { FuelPrices, GasStation } from '../../../core/models/gas-station.model';
 import { Coordinates, LocationService } from '../../../core/services/location.service';
 import { MitecoService } from '../../../core/services/miteco.service';
 
@@ -47,6 +49,15 @@ function haversineDistanceKm(origen: Coordinates, destino: Coordinates): number 
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
 }
 
+/** Tipo de combustible por el que se puede filtrar el mapa (RF-03). Derivado de `FuelPrices` para no duplicar los 3 nombres de campo a mano. */
+type FuelKey = keyof FuelPrices;
+
+const FUEL_LABELS: Record<FuelKey, string> = {
+  gasolina95: 'Gasolina 95',
+  gasolina98: 'Gasolina 98',
+  diesel: 'Diésel',
+};
+
 /**
  * Fallback defensivo por si algún marcador se crease sin icono explícito
  * (no ocurre en este componente: tanto el marcador de usuario como los de
@@ -76,8 +87,8 @@ const USER_MARKER_COLOR = '#2563EB';
 /**
  * Icono de gasolinera: chincheta (forma "pin") en naranja de marca.
  * Se crea una única vez (constante de módulo) y se reutiliza en los hasta
- * 50 marcadores de `renderStations`, en vez de instanciar un `L.DivIcon`
- * por estación — mismo criterio de minimizar objetos en memoria ya aplicado
+ * 50 marcadores de `redraw`, en vez de instanciar un `L.DivIcon` por
+ * estación — mismo criterio de minimizar objetos en memoria ya aplicado
  * al límite de marcadores (ver `docs/features/03-capa-gasolineras.md`).
  */
 const STATION_ICON = L.divIcon({
@@ -115,6 +126,7 @@ const USER_ICON = L.divIcon({
   templateUrl: './map.component.html',
   styleUrl: './map.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [IonSegment, IonSegmentButton, IonLabel],
 })
 export class MapComponent implements AfterViewInit, OnDestroy {
   @ViewChild('mapContainer', { static: true })
@@ -124,6 +136,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   protected readonly locationError = signal<string | null>(null);
   /** Mensaje de error de carga de gasolineras, mostrado de forma accesible bajo el mapa. */
   protected readonly stationsError = signal<string | null>(null);
+  /** Combustible seleccionado en el `ion-segment` (RF-03). Por defecto, Gasolina 95. */
+  protected readonly selectedFuel = signal<FuelKey>('gasolina95');
+  protected readonly fuelLabels = FUEL_LABELS;
 
   private readonly locationService = inject(LocationService);
   private readonly mitecoService = inject(MitecoService);
@@ -134,10 +149,29 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /**
    * Todas las gasolineras se añaden a este `L.LayerGroup` (en vez de
    * directamente al mapa) para poder limpiarlas con una sola llamada
-   * (`clearLayers()`) si en el futuro se recargan (ej. el usuario se mueve).
-   * Se destruye junto con el resto del mapa en `ngOnDestroy` (`map.remove()`).
+   * (`clearLayers()`) cada vez que cambia el filtro de combustible o se
+   * recargan (ej. el usuario se mueve). Se destruye junto con el resto del
+   * mapa en `ngOnDestroy` (`map.remove()`).
    */
   private stationsLayer: L.LayerGroup | null = null;
+
+  /**
+   * Última respuesta de MITECO y origen usado, cacheados en memoria (no en
+   * un signal: no necesitan disparar el `effect` de `redraw` por sí solos,
+   * solo servir de entrada la próxima vez que se invoque). Cambiar de
+   * combustible no debe volver a pedir ~11.500 registros a la API: se
+   * reutilizan estos datos y solo se recalculan distancia/orden/recorte.
+   */
+  private estacionesCache: GasStation[] = [];
+  private origenCache: Coordinates | null = null;
+
+  constructor() {
+    // Reactividad del filtro: `redraw()` lee la signal `selectedFuel` en su
+    // propio cuerpo, así que Angular la registra como dependencia del efecto
+    // y lo vuelve a ejecutar automáticamente cada vez que el usuario cambia
+    // de segmento — sin necesidad de un handler que llame a `redraw()` a mano.
+    effect(() => this.redraw());
+  }
 
   ngAfterViewInit(): void {
     this.map = L.map(this.mapContainerRef.nativeElement, {
@@ -188,6 +222,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.stationsLayer = null;
   }
 
+  /** Handler del `(ionChange)` del `ion-segment`: solo actualiza la signal; `redraw()` se dispara solo vía el `effect` del constructor. */
+  protected onFuelChange(event: SegmentCustomEvent): void {
+    const value = event.detail.value;
+    if (value === 'gasolina95' || value === 'gasolina98' || value === 'diesel') {
+      this.selectedFuel.set(value);
+    }
+  }
+
   private centerOnUser(coords: Coordinates): void {
     if (!this.map) {
       return;
@@ -201,27 +243,42 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       .bindPopup('Estás aquí');
   }
 
-  /**
-   * Obtiene todas las estaciones de MITECO y dibuja únicamente las
-   * `MAX_ESTACIONES_EN_MAPA` más cercanas a `origen` (ver justificación de
-   * memoria en `docs/features/03-capa-gasolineras.md`).
-   */
+  /** Descarga todas las estaciones de MITECO, las cachea y dispara el primer `redraw()`. */
   private loadNearestStations(origen: Coordinates): void {
     this.mitecoService
       .getEstaciones()
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
-        next: (estaciones) => this.renderStations(estaciones, origen),
+        next: (estaciones) => {
+          this.estacionesCache = estaciones;
+          this.origenCache = origen;
+          this.redraw();
+        },
         error: (error: Error) => this.stationsError.set(error.message),
       });
   }
 
-  private renderStations(estaciones: GasStation[], origen: Coordinates): void {
-    if (!this.map || !this.stationsLayer) {
+  /**
+   * Filtra por el combustible seleccionado, calcula la distancia de TODAS
+   * las estaciones filtradas, ordena de menor a mayor distancia y SOLO
+   * DESPUÉS recorta a `MAX_ESTACIONES_EN_MAPA`. El orden importa: si se
+   * recortara antes de filtrar (o se filtrara solo dentro de un recorte ya
+   * hecho por distancia global), las 50 más cercanas "reales" que sí tienen
+   * el combustible elegido podrían quedar fuera en favor de estaciones más
+   * cercanas mundialmente pero sin ese combustible, o de estaciones ya
+   * descartadas del recorte inicial (ver `docs/features/04-filtros-combustible.md`).
+   */
+  private redraw(): void {
+    const origen = this.origenCache;
+    if (!this.map || !this.stationsLayer || !origen) {
       return;
     }
 
-    const masCercanas = estaciones
+    const fuel = this.selectedFuel();
+
+    const conCombustible = this.estacionesCache.filter((estacion) => estacion.precios[fuel] !== null);
+
+    const masCercanas = conCombustible
       .map((estacion) => ({ estacion, distanciaKm: haversineDistanceKm(origen, estacion) }))
       .sort((a, b) => a.distanciaKm - b.distanciaKm)
       .slice(0, MAX_ESTACIONES_EN_MAPA);
@@ -229,10 +286,13 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // TODO(debug temporal): quitar tras confirmar con el usuario que el filtro
     // de cercanía no es el causante de "faltan gasolineras" (ver auditoría en
     // docs/features/03-capa-gasolineras.md).
-    console.log(`Total gasolineras recibidas: ${estaciones.length}, Total dibujadas: ${masCercanas.length}`);
+    console.log(
+      `Total gasolineras recibidas: ${this.estacionesCache.length}, ` +
+        `con ${FUEL_LABELS[fuel]}: ${conCombustible.length}, Total dibujadas: ${masCercanas.length}`,
+    );
 
-    // Limpia los marcadores de una carga anterior antes de dibujar los nuevos
-    // (evita acumular marcadores huérfanos si este método se invoca más de una vez).
+    // Limpia los marcadores de una carga (o filtro) anterior antes de dibujar
+    // los nuevos (evita acumular marcadores huérfanos).
     this.stationsLayer.clearLayers();
 
     for (const { estacion } of masCercanas) {
@@ -240,28 +300,30 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         icon: STATION_ICON,
         title: `Gasolinera ${estacion.marca} en ${estacion.municipio}`,
       })
-        .bindPopup(this.buildPopupHtml(estacion), { className: 'gas-station-popup' })
+        .bindPopup(this.buildPopupHtml(estacion, fuel), { className: 'gas-station-popup' })
         .addTo(this.stationsLayer);
     }
   }
 
   /**
-   * HTML del popup de cada gasolinera. Solo interpola `marca` (tipo cerrado
+   * HTML del popup de cada gasolinera: solo el precio del combustible
+   * seleccionado (nunca los 3). Solo interpola `marca` (tipo cerrado
    * `GasStationBrand`, generado por `MitecoService`, nunca texto libre de la
-   * API) y precios numéricos — nunca campos de texto libre de la fuente
-   * externa (`direccion`/`municipio`), para no introducir HTML/JS arbitrario
-   * en el mapa vía `bindPopup` (que interpreta el string como HTML).
+   * API), la etiqueta fija del combustible y un precio numérico — nunca
+   * campos de texto libre de la fuente externa (`direccion`/`municipio`),
+   * para no introducir HTML/JS arbitrario en el mapa vía `bindPopup` (que
+   * interpreta el string como HTML).
    */
-  private buildPopupHtml(estacion: GasStation): string {
-    const precio = (valor: number | null): string => (valor !== null ? `${valor.toFixed(3)} €` : 'No disponible');
+  private buildPopupHtml(estacion: GasStation, fuel: FuelKey): string {
+    const precio = estacion.precios[fuel];
+    // Invariante: `redraw()` ya filtró por `precios[fuel] !== null` antes de
+    // llegar aquí, pero se mantiene el guard por si esta función se reutiliza
+    // alguna vez con una estación sin filtrar previamente.
+    const precioTexto = precio !== null ? `${precio.toFixed(3)} €` : 'No disponible';
 
     return `
       <strong class="gas-station-popup__marca">${estacion.marca}</strong>
-      <ul class="gas-station-popup__precios">
-        <li>Gasolina 95: ${precio(estacion.precios.gasolina95)}</li>
-        <li>Gasolina 98: ${precio(estacion.precios.gasolina98)}</li>
-        <li>Diésel: ${precio(estacion.precios.diesel)}</li>
-      </ul>
+      <p class="gas-station-popup__precio">${FUEL_LABELS[fuel]}: ${precioTexto}</p>
     `;
   }
 }

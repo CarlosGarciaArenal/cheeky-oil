@@ -108,21 +108,9 @@
   margin-bottom: 4px;
 }
 
-.gas-station-popup__precios {
-  list-style: none;
+.gas-station-popup__precio {
   margin: 0;
-  padding: 0;
   font-size: 0.85rem;
-}
-
-.gas-station-popup__precios li {
-  padding: 3px 0;
-  border-top: 1px solid rgba(194, 65, 12, 0.15);
-}
-
-.gas-station-popup__precios li:first-child {
-  border-top: none;
-  padding-top: 0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -134,10 +122,6 @@
 
   .gas-station-popup__marca {
     color: #ff8a5b;
-  }
-
-  .gas-station-popup__precios li {
-    border-top-color: rgba(255, 138, 91, 0.25);
   }
 
   .gas-station-popup .leaflet-popup-close-button {
