@@ -1,7 +1,16 @@
 <div #mapContainer class="map" role="application" aria-label="Mapa de gasolineras cercanas"></div>
 
-@if (locationError()) {
-  <p class="map__error" role="alert">
-    No se pudo obtener tu ubicación: {{ locationError() }}
-  </p>
+@if (locationError() || stationsError()) {
+  <div class="map__errors">
+    @if (locationError()) {
+      <p class="map__error" role="alert">
+        No se pudo obtener tu ubicación: {{ locationError() }}
+      </p>
+    }
+    @if (stationsError()) {
+      <p class="map__error" role="alert">
+        No se pudieron cargar las gasolineras: {{ stationsError() }}
+      </p>
+    }
+  </div>
 }

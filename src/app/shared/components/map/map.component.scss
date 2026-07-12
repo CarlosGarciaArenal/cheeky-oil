@@ -10,16 +10,22 @@
   height: 100%;
 }
 
-.map__error {
+.map__errors {
   position: absolute;
   bottom: 12px;
   left: 12px;
   right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.map__error {
   margin: 0;
   padding: 8px 12px;
   border-radius: 8px;
   background: var(--ion-color-danger, #eb445a);
   color: var(--ion-color-danger-contrast, #fff);
   font-size: 0.875rem;
-  z-index: 1000;
 }
