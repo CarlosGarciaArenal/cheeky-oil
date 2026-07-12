@@ -423,3 +423,49 @@ Se calculó el contraste real (fórmula de luminancia relativa WCAG) de cada com
 ### Veredicto final
 
 **Aprobado para commit.** Identidad visual coherente con la marca (naranja del logo), diferenciación usuario/gasolinera por forma y color (no solo color, por accesibilidad), y un problema real de contraste (botón de cerrar del popup) detectado y corregido en la propia auditoría antes de dar el visto bueno.
+
+---
+
+## Investigación: "Faltan gasolineras cercanas en el mapa" [REVIEWER] + [ARQUITECTO]
+
+**Roles:** [REVIEWER] + [ARQUITECTO]
+**Estado:** Investigado con datos reales; un hallazgo corregido, dos hipótesis descartadas con evidencia
+**Archivos modificados:**
+- `src/app/core/services/miteco.service.ts`
+- `src/app/shared/components/map/map.component.ts`
+
+Ante el reporte de un usuario de que faltan gasolineras cercanas, se auditaron las dos piezas señaladas (parseo de coordenadas y fórmula de distancia) **contra una descarga real y actual de la API de MITECO (11.517 estaciones)**, no solo por lectura de código, para no dar por buena ni por mala una hipótesis sin comprobarla.
+
+### 1. Parseo de `Latitud`/`Longitud (WGS84)` en `miteco.service.ts`
+
+**Comprobación empírica:** se descargaron las 11.517 estaciones reales y se aplicó el mismo `parseNumero()` (reemplazo de coma por punto + `parseFloat` + guarda `Number.isNaN`) a cada una. Resultado: **0 fallos de parseo** (`nullLat: 0, nullLng: 0`) — hoy, ninguna estación tiene una coordenada que no se pueda convertir a número.
+
+**Hallazgo real, aunque no se manifiesta con los datos actuales:** el código sí tenía un problema — `lat: this.parseNumero(raw.Latitud) ?? 0`. Si una coordenada llegara alguna vez vacía o corrupta, la estación **no se descartaba**: se dibujaba en `(0, 0)` (una coordenada real, en el golfo de Guinea), en vez de ignorarse. Esto ya se había registrado como deuda técnica no bloqueante en la auditoría de "Marcadores de Gasolineras en el Mapa" de este mismo documento. Se corrige ahora tal como pide el ticket: `toGasStation()` devuelve `GasStation | null`, y `getEstaciones()` filtra (`Array.prototype.filter`) las estaciones cuyo `lat`/`lng` no parseen a un número — se ignora esa estación concreta, el resto de la respuesta no se ve afectado (ninguna excepción interrumpe el `.map()`).
+
+**Verificado tras el cambio:** se repitió la descarga real y se confirmó `recibidas: 11517, descartadas: 0` — el nuevo filtro no elimina ninguna estación real hoy; es una salvaguarda para el futuro, no la causa del problema reportado.
+
+### 2. Fórmula de distancia en `map.component.ts`
+
+**Comprobación empírica:** se replicó exactamente `haversineDistanceKm()` en Node y se ejecutó contra el dataset real completo, usando como origen el mismo `DEFAULT_CENTER` del componente (Madrid, `40.4168, -3.7038`). Resultado: las 50 estaciones más cercanas quedan entre **1.28 km y 4.50 km** de distancia, con direcciones reales y verificables de Madrid capital (Glorieta de Embajadores, Ronda de Segovia, Paseo de las Acacias, Alberto Aguilera...). La fórmula del haversine está bien implementada: usa `sin²(Δlat/2) + cos(lat1)·cos(lat2)·sin²(Δlng/2)` y `2·R·asin(√h)` correctamente, con `R = 6371 km`.
+
+**Veredicto: no se encontró ningún error en el cálculo de distancia.** Se descarta esta hipótesis con evidencia, no por inspección visual del código.
+
+### 3. `console.log` de diagnóstico (temporal)
+
+Se añadió en `renderStations()`:
+
+```ts
+console.log(`Total gasolineras recibidas: ${estaciones.length}, Total dibujadas: ${masCercanas.length}`);
+```
+
+Marcado con `// TODO(debug temporal)` en el propio código para recordar retirarlo una vez diagnosticado el caso real del usuario. Dado que ni el parseo ni la fórmula de distancia fallan con los datos actuales, este log ayudará a diferenciar entre las causas más probables que quedan **fuera de lo que el código puede corregir por sí solo**:
+
+- El usuario está en una zona de baja densidad de estaciones (`Total dibujadas` sería &lt; 50, correcto y esperado — no es un bug).
+- La geolocalización falló silenciosamente y el origen usado fue `DEFAULT_CENTER` (Madrid) en vez de la ubicación real (visible ya hoy vía el mensaje de `locationError`, pero el log ayuda a correlacionarlo).
+- El límite `MAX_ESTACIONES_EN_MAPA = 50` excluye estaciones que el usuario percibe como "cercanas" pero que no están entre las 50 más próximas en línea recta (comportamiento por diseño, documentado en el ciclo de "Marcadores de Gasolineras en el Mapa"; la mitigación futura ya registrada es el FAB "buscar en esta zona" tras mover el mapa).
+
+### Veredicto de la auditoría
+
+**Ningún error encontrado en la fórmula de distancia.** Parseo de coordenadas correcto con los datos actuales, pero se corrige una vulnerabilidad latente (`?? 0`) que sí podía, en teoría, ocultar estaciones con coordenadas corruptas en vez de excluirlas limpiamente — ahora se descartan explícitamente. Se añade instrumentación temporal para diagnosticar la causa real del reporte del usuario, que muy probablemente no está en el código auditado sino en densidad regional de estaciones o en el origen de geolocalización usado.
+
+**Aprobado para commit.**

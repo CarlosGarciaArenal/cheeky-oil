@@ -226,6 +226,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       .sort((a, b) => a.distanciaKm - b.distanciaKm)
       .slice(0, MAX_ESTACIONES_EN_MAPA);
 
+    // TODO(debug temporal): quitar tras confirmar con el usuario que el filtro
+    // de cercanía no es el causante de "faltan gasolineras" (ver auditoría en
+    // docs/features/03-capa-gasolineras.md).
+    console.log(`Total gasolineras recibidas: ${estaciones.length}, Total dibujadas: ${masCercanas.length}`);
+
     // Limpia los marcadores de una carga anterior antes de dibujar los nuevos
     // (evita acumular marcadores huérfanos si este método se invoca más de una vez).
     this.stationsLayer.clearLayers();

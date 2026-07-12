@@ -68,17 +68,32 @@ const ROTULO_SIN_MARCA = /^(N[º°o]?\.?\s*)?\d/;
 export class MitecoService {
   private readonly http = inject(HttpClient);
 
-  /** Descarga y mapea todas las estaciones terrestres de España. */
+  /**
+   * Descarga y mapea todas las estaciones terrestres de España.
+   * Las estaciones cuya `Latitud`/`Longitud (WGS84)` no se puedan parsear a
+   * un número válido se descartan (no se emiten con `lat`/`lng` a `0`, que
+   * sería una coordenada real y falsa en el golfo de Guinea): una estación
+   * sin coordenadas fiables no puede participar en el cálculo de "más
+   * cercanas" de `MapComponent`. El resto de estaciones no se ve afectado.
+   */
   getEstaciones(): Observable<GasStation[]> {
     return this.http.get<MitecoRespuesta>(MITECO_API_URL).pipe(
       map((respuesta) => {
         const actualizadoEn = this.parseFecha(respuesta.Fecha);
-        return respuesta.ListaEESSPrecio.map((raw) => this.toGasStation(raw, actualizadoEn));
+        return respuesta.ListaEESSPrecio.map((raw) => this.toGasStation(raw, actualizadoEn)).filter(
+          (estacion): estacion is GasStation => estacion !== null,
+        );
       }),
     );
   }
 
-  private toGasStation(raw: MitecoEstacionRaw, actualizadoEn: number): GasStation {
+  private toGasStation(raw: MitecoEstacionRaw, actualizadoEn: number): GasStation | null {
+    const lat = this.parseNumero(raw.Latitud);
+    const lng = this.parseNumero(raw['Longitud (WGS84)']);
+    if (lat === null || lng === null) {
+      return null;
+    }
+
     return {
       id: raw.IDEESS,
       marca: this.toBrand(raw['Rótulo']),
@@ -89,8 +104,8 @@ export class MitecoService {
         gasolina98: this.parseNumero(raw['Precio Gasolina 98 E5']),
         diesel: this.parseNumero(raw['Precio Gasoleo A']),
       },
-      lat: this.parseNumero(raw.Latitud) ?? 0,
-      lng: this.parseNumero(raw['Longitud (WGS84)']) ?? 0,
+      lat,
+      lng,
       actualizadoEn,
     };
   }
