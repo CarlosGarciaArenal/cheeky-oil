@@ -268,3 +268,75 @@ Auditoría releída línea a línea de forma independiente (no se ha dado por bu
 ### Veredicto final del ciclo
 
 **Aprobado para commit.** El mapeo de datos gestiona correctamente los valores nulos/ausentes de la API en los campos donde importa (precios, marca, fecha), y el límite de 50 marcadores está implementado de forma efectiva y verificable, con limpieza completa de recursos al destruir el componente. Queda registrada una única mejora no bloqueante (fallback `?? 0` de coordenadas inválidas) como deuda técnica para un futuro ciclo, sin impacto en los datos reales actuales de la API.
+
+---
+
+## Corrección: 404 real de los iconos de marcador con `ng serve`
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.ts`
+
+### El problema
+
+Con `ng build` el 404 no se reproducía (los 3 PNG de `assets/leaflet/` se servían con 200), pero con `ng serve` en un navegador real sí aparecía. La diferencia es que el 404 solo se dispara si el navegador ejecuta la lógica de detección de iconos de Leaflet (`_detectIconPath()`), algo que una petición `curl` a los assets nunca activa — de ahí que la primera verificación (solo `curl` a los PNG) no lo detectara.
+
+### Causa raíz (diagnosticada leyendo `node_modules/leaflet/dist/leaflet-src.js`)
+
+`Icon.Default._getIconUrl(name)` calcula la URL final así:
+
+```js
+return (this.options.imagePath || IconDefault.imagePath) + Icon.prototype._getIconUrl.call(this, name);
+```
+
+Si `IconDefault.imagePath` no es un `string` explícito, Leaflet llama a `_detectIconPath()`, que crea un `<div class="leaflet-default-icon-path">` invisible, lee su `background-image` computado (definido por la regla CSS del mismo nombre en `leaflet.css`) y usa esa URL como prefijo.
+
+Se comprobó contra el CSS realmente servido por `ng serve` (`styles.css`) que esa regla llega así tras el pipeline de Angular:
+
+```css
+.leaflet-default-icon-path {
+  background-image: url("./media/marker-icon.png");
+}
+```
+
+El navegador resuelve `./media/marker-icon.png` de forma absoluta respecto a `styles.css` (`http://localhost:4300/media/marker-icon.png`), por lo que `_detectIconPath()` devolvía `http://localhost:4300/media/` como prefijo. Como el código anterior fijaba `iconUrl: 'assets/leaflet/marker-icon.png'` vía `mergeOptions` (una ruta ya completa), el resultado final concatenado era:
+
+```
+http://localhost:4300/media/ + assets/leaflet/marker-icon.png
+= http://localhost:4300/media/assets/leaflet/marker-icon.png   ← 404
+```
+
+Es decir: el bug no estaba en si el asset existía (existía y existe), sino en que Leaflet anteponía un prefijo autodetectado (y erróneo en este proyecto) delante de una ruta que ya era completa por sí sola.
+
+### La corrección
+
+```typescript
+L.Icon.Default.imagePath = 'assets/leaflet/';
+```
+
+Al fijar `Icon.Default.imagePath` como un `string` explícito, Leaflet **nunca ejecuta `_detectIconPath()`** (el `typeof ... !== 'string'` que lo dispara pasa a ser `false`), y `_getIconUrl` usa directamente `'assets/leaflet/' + 'marker-icon.png'` (nombres de archivo por defecto de `Icon.Default`, sin necesidad de sobrescribir `iconUrl`/`iconRetinaUrl`/`shadowUrl` con `mergeOptions`). Se elimina por tanto el `L.Icon.Default.mergeOptions({...})` anterior: mezclar ambos mecanismos a la vez (`imagePath` + rutas completas en `iconUrl`) sería lo que produce el doble prefijo.
+
+### Nota sobre `angular.json`
+
+La sugerencia de añadir la regla de `assets` para `node_modules/leaflet/dist/images` → `assets/leaflet` **ya existía sin cambios** desde `02-mapa-base.md`; no era necesario ni se ha tocado `angular.json` en esta corrección. El bug estaba enteramente en cómo Leaflet construye la URL en tiempo de ejecución, no en si el asset se copiaba al build.
+
+---
+
+## Auditoría de la Corrección de Iconos [REVIEWER]
+
+**Rol:** [REVIEWER]
+**Archivo auditado:**
+- `src/app/shared/components/map/map.component.ts`
+
+- [x] **Causa raíz verificada con evidencia, no supuesta.** Se leyó el código fuente real de `Icon.Default._getIconUrl`/`_detectIconPath` en `node_modules/leaflet/dist/leaflet-src.js` y se comparó contra el CSS efectivamente servido por `ng serve` (`.leaflet-default-icon-path { background-image: url("./media/marker-icon.png"); }`), confirmando la ruta exacta del prefijo erróneo (`/media/`) antes de escribir el fix.
+- [x] **El fix es mínimo y no redundante.** Se sustituye `mergeOptions({iconUrl, iconRetinaUrl, shadowUrl})` por una única asignación (`imagePath`), en vez de mantener ambos mecanismos simultáneamente (lo que habría reintroducido el doble prefijo).
+- [x] **Verificado tras el cambio, con `ng serve` real (puerto 4300, proceso limpio) y `curl` a los 3 PNG**: `marker-icon.png`, `marker-icon-2x.png`, `marker-shadow.png` → 200 OK.
+- [x] **No se ha tocado `angular.json`**: la regla de copia de assets ya era correcta; confirmado que no era la causa del 404.
+- [x] **Sin dependencia de CDN de terceros introducida.** Se descartó explícitamente la alternativa de apuntar a `unpkg.com` propuesta inicialmente, manteniendo el criterio de coste cero / sin red de terceros ya documentado en `02-mapa-base.md`.
+- [x] **`tsc --noEmit`, `npm run lint` y `ng build --configuration development`** ejecutados tras el cambio: sin errores.
+- [ ] ⚠️ **Nota (no bloqueante):** no se ha podido verificar con un navegador real automatizado (sin Playwright/Puppeteer instalado en el proyecto); la verificación se basó en lectura del código fuente de Leaflet + inspección del CSS servido, que reproduce con precisión la lógica que ejecutaría un navegador real (`getComputedStyle` sobre `background-image`). Se recomienda al usuario confirmar visualmente en su propio `ng serve` tras este cambio.
+
+### Veredicto
+
+**Aprobado para commit.** Causa raíz identificada con evidencia (no por ensayo y error), corrección mínima y verificada contra el mecanismo real de Leaflet, sin reintroducir dependencias de terceros ni cambios innecesarios en `angular.json`.

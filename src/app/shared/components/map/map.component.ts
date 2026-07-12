@@ -51,12 +51,18 @@ function haversineDistanceKm(origen: Coordinates, destino: Coordinates): number 
  * Iconos de marcador servidos como assets propios (`assets/leaflet/`, copiados
  * desde `node_modules/leaflet/dist/images` vía `angular.json`) en lugar de
  * apuntar a una CDN: coste cero y funciona offline/sin depender de terceros.
+ *
+ * `Icon.Default._getIconUrl()` calcula la URL final como
+ * `(this.options.imagePath || Icon.Default.imagePath) + <nombre de archivo>`
+ * (ver `node_modules/leaflet/dist/leaflet-src.js`). Si no fijamos
+ * `imagePath`, Leaflet ejecuta `_detectIconPath()`, que busca la regla CSS
+ * `.leaflet-default-icon-path` (definida en `leaflet.css`) y usa la URL de
+ * imagen ahí declarada como prefijo — en esta app esa regla se resuelve a
+ * una ruta que no coincide con dónde servimos los assets (`assets/leaflet/`),
+ * dando una URL con doble prefijo que 404. Fijar `imagePath` explícitamente
+ * anula esa autodetección basada en CSS y usa siempre esta ruta.
  */
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'assets/leaflet/marker-icon-2x.png',
-  iconUrl: 'assets/leaflet/marker-icon.png',
-  shadowUrl: 'assets/leaflet/marker-shadow.png',
-});
+L.Icon.Default.imagePath = 'assets/leaflet/';
 
 /**
  * Mapa base (Leaflet + OpenStreetMap) centrado en la ubicación del usuario.
