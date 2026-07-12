@@ -1,21 +1,17 @@
 <div #mapContainer class="map" role="application" aria-label="Mapa de gasolineras cercanas"></div>
 
-<ion-segment
+<ion-select
   class="map__fuel-filter"
+  fill="solid"
+  interface="popover"
   [value]="selectedFuel()"
   (ionChange)="onFuelChange($event)"
   aria-label="Filtrar gasolineras por tipo de combustible"
 >
-  <ion-segment-button value="gasolina95">
-    <ion-label>{{ fuelLabels.gasolina95 }}</ion-label>
-  </ion-segment-button>
-  <ion-segment-button value="gasolina98">
-    <ion-label>{{ fuelLabels.gasolina98 }}</ion-label>
-  </ion-segment-button>
-  <ion-segment-button value="diesel">
-    <ion-label>{{ fuelLabels.diesel }}</ion-label>
-  </ion-segment-button>
-</ion-segment>
+  <ion-select-option value="gasolina95">{{ fuelLabels.gasolina95 }}</ion-select-option>
+  <ion-select-option value="gasolina98">{{ fuelLabels.gasolina98 }}</ion-select-option>
+  <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
+</ion-select>
 
 @if (locationError() || stationsError()) {
   <div class="map__errors">

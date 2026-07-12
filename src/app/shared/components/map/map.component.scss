@@ -11,15 +11,32 @@
 }
 
 /*
- * Solo posición/sombra: el color de fondo lo resuelve `ion-segment` con sus
- * propias variables de Ionic (ya claro/oscuro automático), sin necesidad de
- * sobreescribirlo aquí.
+ * Solo posición/sombra: el fondo sólido y visible lo resuelve el atributo
+ * `fill="solid"` del propio `ion-select` en la plantilla (theme-aware,
+ * claro/oscuro automático) — antes, sin `fill`, el control no tenía fondo
+ * propio y quedaba transparente/invisible sobre las teselas del mapa.
+ *
+ * `ion-content[fullscreen]` (ver `home.page.html`) hace que el mapa ocupe
+ * todo el viewport por detrás de la cabecera translúcida (`app.component.html`,
+ * `ion-header [translucent]="true"`), a propósito, para que el mapa se vea
+ * a pantalla completa. Eso significa que "top: 12px" caía literalmente
+ * debajo de la cabecera y era inalcanzable. El offset de `top` de aquí
+ * despeja la altura real de un `ion-toolbar` (44px en iOS, 56px en MD —
+ * se usa el mayor de los dos) más el "notch"/isla dinámica del dispositivo
+ * (`env(safe-area-inset-top)`) y un margen de 8px, en vez de solapar la
+ * cabecera. Se ancla solo a la derecha (`right`, sin `left`) para que sea
+ * un control compacto en la esquina superior derecha, no una barra a todo
+ * lo ancho, y así no compita visualmente con el logo/nombre de la marca
+ * en la cabecera (arriba a la izquierda).
  */
 .map__fuel-filter {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: calc(env(safe-area-inset-top, 0px) + 56px + 8px);
   right: 12px;
+  /* Límite defensivo en pantallas muy estrechas: sin esto, un ancho por
+     contenido (shrink-to-fit) mayor que el viewport se saldría por la
+     izquierda en vez de encogerse. */
+  max-width: calc(100% - 24px);
   z-index: 1000;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);

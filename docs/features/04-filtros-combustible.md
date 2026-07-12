@@ -146,3 +146,168 @@ flowchart LR
 - [UI-DEV] (futuro): recordar el filtro elegido entre sesiones (ej. `localStorage`) para no resetear siempre a Gasolina 95.
 - [ARQUITECTO] (futuro): si se añade un histórico de precios, este mismo patrón de `effect()` sobre `selectedFuel` serviría también para filtrar ese histórico sin duplicar lógica.
 - [REVIEWER] (futuro): retirar el `console.log` de diagnóstico de `redraw()` una vez confirmado con el usuario que el filtro de cercanía no es la causa de "faltan gasolineras".
+
+---
+
+## Corrección: el filtro quedaba oculto detrás de la cabecera
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.scss`
+
+### El problema
+
+El usuario reportó que el `ion-segment` no se podía pulsar: quedaba tapado por la cabecera de la app. Causa: `home.page.html` usa `<ion-content [fullscreen]="true">`, así que `<app-map>` ocupa el viewport completo **por detrás** de la cabecera translúcida (`app.component.html`, `ion-header [translucent]="true"`) — una decisión de diseño intencionada de [[02-mapa-base]] para que el mapa se vea a pantalla completa. El `top: 12px` original del filtro no tenía en cuenta que el propio contenedor del mapa empieza en `y = 0` de la pantalla, no debajo de la cabecera: el filtro quedaba dibujado justo en la zona que la cabecera cubre visualmente encima.
+
+### La corrección
+
+```scss
+.map__fuel-filter {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 56px + 8px);
+  right: 12px;
+  max-width: calc(100% - 24px);
+  ...
+}
+```
+
+1. **`56px`**: altura mínima real de `ion-toolbar` en modo MD (`--min-height: 56px`, ver `node_modules/@ionic/core/dist/collection/components/toolbar/toolbar.md.css`) — se usa la mayor de las dos plataformas (iOS es `44px`) para despejar la cabecera en ambos modos, ya que esta app no fuerza un `mode` concreto (se autodetecta por plataforma).
+2. **`env(safe-area-inset-top, 0px)`**: añade el hueco del "notch"/isla dinámica en dispositivos con pantalla recortada, para no quedar aún más tapado en esos casos.
+3. **`+ 8px`**: margen de separación visual entre la cabecera y el filtro, coherente con el resto de márgenes del componente (`12px` en `.map__errors`).
+4. **Se ancla solo con `right: 12px` (sin `left`)**, en vez de `left: 12px; right: 12px` (barra a todo lo ancho) — pasa a ser un control compacto en la esquina superior derecha, tal como se pidió, y no compite visualmente con el logo/nombre de marca de la cabecera (que queda arriba a la izquierda).
+5. **`max-width: calc(100% - 24px)`**: red de seguridad en pantallas muy estrechas. Al anclar solo por la derecha, el ancho del control se calcula por contenido (`shrink-to-fit`); sin este límite, en un viewport suficientemente estrecho el control podría salirse por la izquierda de la pantalla en vez de encogerse.
+
+### Verificado
+
+- `tsc --noEmit`, `npm run lint` y `ng build --configuration development`: sin errores.
+- Confirmado en el bundle compilado (`www/home.page-*.js`) que la regla `top: calc(env(safe-area-inset-top, 0px) + 56px + 8px); right: 12px;` llega intacta al CSS final del componente.
+- Sin cambios en `map.component.ts`/`.html`: el fix es puramente de posicionamiento CSS, no toca la lógica de filtrado ni el `effect` de reactividad ya auditados.
+
+---
+
+## Corrección de Usabilidad y Bug Crítico de Reactividad
+
+**Roles:** [UI-DEV] + [ARQUITECTO]
+**Estado:** Corregido
+**Archivos modificados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/shared/components/map/map.component.html`
+- `src/app/shared/components/map/map.component.scss`
+
+El usuario reportó tres problemas tras la corrección de posición anterior: (1) el control seguía sin verse bien ("transparente"), (2) en una app móvil un selector de 3 botones permanentemente visible ocupa demasiado espacio sobre el mapa, y (3) **cambiar de combustible no actualizaba el mapa**: los popups seguían mostrando siempre Gasolina 95 aunque el segmento mostrara otra opción seleccionada.
+
+### 1. Bug crítico [ARQUITECTO]: el `effect()` de reactividad "moría" en su primera ejecución
+
+**Diagnóstico.** `redraw()` tenía esta forma:
+
+```ts
+private redraw(): void {
+  const origen = this.origenCache;
+  if (!this.map || !this.stationsLayer || !origen) {
+    return;   // ← se corta AQUÍ en la primera ejecución
+  }
+  const fuel = this.selectedFuel();   // ← nunca se llega a leer la primera vez
+  ...
+}
+```
+
+Un `effect()` de Angular registra como dependencia **únicamente los signals que se leen durante una ejecución concreta** (el *tracking* es dinámico, no estático por la sola presencia de `this.selectedFuel()` en el código). El `effect(() => this.redraw())` del constructor se ejecuta una primera vez inmediatamente al construirse el componente — en ese momento `origenCache` todavía es `null` (la geolocalización/API son asíncronas y aún no han resuelto), así que `redraw()` cortaba en el `return` **antes** de llegar a leer `this.selectedFuel()`. Esa primera ejecución no leyó ningún signal, así que Angular no registró ninguna dependencia: el efecto quedó sin nada que "vigilar" y **nunca se volvió a disparar solo**, por muchas veces que el usuario cambiara de combustible después.
+
+El primer y único `redraw()` que sí llegaba a dibujar algo era la llamada **directa** (no por el efecto) desde `loadNearestStations()`, que capturaba el valor de `selectedFuel()` en ese instante — siempre `'gasolina95'`, el valor por defecto, porque ocurre justo tras la carga inicial de datos, antes de que el usuario haya podido tocar el selector. De ahí el síntoma exacto reportado: el mapa se quedaba congelado con Gasolina 95 para siempre, sin importar qué se seleccionara después.
+
+**La corrección:**
+
+```ts
+private redraw(): void {
+  const fuel = this.selectedFuel(); // se lee siempre, antes de cualquier guard
+  const origen = this.origenCache;
+  if (!this.map || !this.stationsLayer || !origen) {
+    return;
+  }
+  ...
+}
+```
+
+Moviendo la lectura de `selectedFuel()` a la primera línea, se garantiza que **toda** ejecución del efecto —incluida la primera, que corta enseguida— lee el signal y queda registrada como dependencia. A partir de ahí, cualquier `selectedFuel.set(...)` posterior sí dispara `redraw()` de nuevo, correctamente.
+
+**Lección general (documentada para futuros ciclos):** en cualquier `effect()`, las lecturas de signals que determinan su reactividad deben ir **antes** de los `return`/guards tempranos, no después. Un guard que corta antes de leer un signal puede dejar el efecto sin dependencias registradas en esa ejecución.
+
+### 2. Rediseño de UI-DEV: de `ion-segment` permanente a `ion-select` compacto y colapsable
+
+**El problema de usabilidad.** Un `ion-segment` de 3 botones queda siempre visible sobre el mapa, ocupando espacio permanentemente — poco apropiado para una app móvil donde la superficie de pantalla es escasa y el mapa es el contenido principal.
+
+**La solución: `ion-select`** (selector nativo tipo desplegable, ya usado en formularios de Ionic):
+
+```html
+<ion-select
+  class="map__fuel-filter"
+  fill="solid"
+  interface="popover"
+  [value]="selectedFuel()"
+  (ionChange)="onFuelChange($event)"
+  aria-label="Filtrar gasolineras por tipo de combustible"
+>
+  <ion-select-option value="gasolina95">{{ fuelLabels.gasolina95 }}</ion-select-option>
+  <ion-select-option value="gasolina98">{{ fuelLabels.gasolina98 }}</ion-select-option>
+  <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
+</ion-select>
+```
+
+1. **Colapsado por defecto, expande y se cierra solo.** `ion-select` muestra permanentemente solo la opción activa (ej. "Gasolina 95"), ocupando una única línea compacta. Al tocarlo, abre un `popover` con las 3 opciones; al elegir una, el popover se cierra automáticamente (comportamiento nativo de Ionic, sin código adicional) — exactamente el patrón "seleccionar y quitar el seleccionable de la pantalla" pedido.
+2. **`interface="popover"`** en vez del `interface="alert"` por defecto: el popover aparece anclado junto al control (contextual, ligero), en vez de un modal a pantalla completa — más apropiado para una elección de 3 opciones cortas.
+3. **`fill="solid"` soluciona la transparencia.** Sin `fill`, `ion-select` no tiene fondo propio (hereda el del contenedor, en este caso el mapa transparente detrás). `fill="solid"` le da un fondo sólido gestionado por las variables de Ionic (`--ion-color-step-150` internamente), ya adaptado a claro/oscuro sin CSS a medida.
+4. **Mismo posicionamiento (esquina superior derecha, offset que despeja la cabecera)** ya corregido en el apartado anterior — el cambio de componente no afecta a ese fix, solo se reutiliza la misma clase `.map__fuel-filter`.
+5. **Se elimina `IonSegment`/`IonSegmentButton`/`IonLabel`/`SegmentCustomEvent`** de los imports del componente, sustituidos por `IonSelect`/`IonSelectOption`/`SelectCustomEvent`. `onFuelChange` pasa a tipar el evento como `SelectCustomEvent`.
+
+### Verificado
+
+- `tsc --noEmit`, `npm run lint` y `ng build --configuration development`: sin errores.
+- Se releyó `redraw()` línea a línea para confirmar que `selectedFuel()` es ahora la primera línea ejecutada, sin ningún camino de código que la salte.
+- Sin cambios en la lógica de filtrado/distancia/recorte (ya auditada); el bug estaba exclusivamente en el orden de lectura del signal dentro de `redraw()`, no en el cálculo en sí.
+
+---
+
+## Auditoría [REVIEWER] (re-auditoría tras el rediseño a `ion-select` y el fix de reactividad)
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/shared/components/map/map.component.html`
+- `src/app/shared/components/map/map.component.scss`
+
+Se repite la misma auditoría del ciclo anterior íntegramente contra el código actual (no se da por buena la auditoría previa sin releerla, ya que el componente ha cambiado de `ion-segment` a `ion-select` y se ha corregido el bug de reactividad entre medias).
+
+### 1. ¿Se limpian los marcadores anteriores antes de dibujar los nuevos al cambiar de combustible?
+
+- [x] **Sí, sigue siendo así.** `this.stationsLayer.clearLayers()` (`map.component.ts`, dentro de `redraw()`) se ejecuta antes del bucle `for` que crea los nuevos `L.marker(...)` — sin cambios respecto al ciclo anterior en este punto concreto.
+- [x] **`redraw()` sigue siendo la única función que dibuja marcadores**, y ahora **sí** se re-ejecuta correctamente en cada cambio de combustible gracias al fix del punto 2 de la sección anterior (antes de esta corrección, `redraw()` con un combustible nuevo directamente no se volvía a invocar, así que tampoco había *forma* de que se duplicaran marcadores — simplemente no se redibujaba nada; ahora que sí se re-invoca en cada cambio, sigue limpiando correctamente antes de cada redibujado).
+- [x] **Sigue usándose `stationsLayer.clearLayers()`** (limpieza de todo el `LayerGroup` de una vez) en vez de `map.removeLayer()` marcador a marcador — mismo razonamiento ya auditado: funcionalmente equivalente, más simple, sin necesidad de mantener un array de referencias.
+
+**Veredicto punto 1: correcto. Sigue sin haber marcadores duplicados, y ahora además el redibujado por cambio de combustible realmente ocurre (antes del fix de reactividad, ni siquiera llegaba a intentarlo).**
+
+### 2. ¿La ordenación por distancia sigue siendo matemáticamente correcta antes del límite de 50?
+
+- [x] **Orden de operaciones sin cambios respecto al ciclo anterior**: `filter` (líneas ~287) → `map` de distancia → `sort` ascendente → `slice(0, MAX_ESTACIONES_EN_MAPA)`, en ese orden. El rediseño de `ion-segment` a `ion-select` y el fix del `effect` no tocaron esta función más allá de mover la lectura de `fuel` al principio.
+- [x] **`fuel` ahora se lee antes del guard de `origen`/`map`/`stationsLayer`**, pero esto no altera el orden filtrar→distancia→ordenar→recortar en sí: sigue siendo `conCombustible.map(...).sort(...).slice(...)`, exactamente igual que lo ya verificado empíricamente contra datos reales en la auditoría anterior de este mismo documento.
+
+**Veredicto punto 2: correcto, sin cambios respecto a la verificación empírica ya realizada.**
+
+### 3. Verificación del bug de reactividad corregido
+
+- [x] **Confirmado leyendo el código actual**: `const fuel = this.selectedFuel();` es la primera línea de `redraw()` (antes de `const origen = this.origenCache;` y de cualquier `if`/`return`). Cualquier ejecución del `effect`, incluida la primera (con `origenCache` aún `null`), lee ahora el signal.
+- [x] **Explicación coherente con el síntoma reportado**: un `effect()` que no lee ningún signal en una ejecución no registra dependencias en esa ejecución — comportamiento de *tracking* dinámico de Angular Signals, no un bug de Angular sino un error de orden en nuestro propio código. El diagnóstico y el fix documentados son consistentes con la causa raíz.
+
+### 4. `console.log` de diagnóstico retirado
+
+- [x] **Confirmado por `grep`**: no queda ninguna llamada a `console.*` en `map.component.ts` ni en `miteco.service.ts`. El bloque `TODO(debug temporal)` y su `console.log` (recibidas/con combustible/dibujadas) se han eliminado por completo, tal como se pidió.
+
+### 5. Otras comprobaciones
+
+- [x] **`tsc --noEmit`, `npm run lint` y `ng build --configuration development`** ejecutados de nuevo tras retirar el `console.log`: sin errores.
+- [x] **Comentario desactualizado corregido**: la anotación de `selectedFuel` mencionaba `ion-segment`; se actualizó a `ion-select` para que la documentación en línea no quede desincronizada del componente real usado.
+- [x] **Sin cambios en Firestore/Cloud Functions ni en el volumen de peticiones a MITECO**: impacto en costes = 0.
+
+### Veredicto final
+
+**Aprobado para commit.** Los marcadores se siguen limpiando correctamente antes de cada redibujado, la ordenación por distancia sigue siendo correcta (sin cambios respecto a la verificación empírica previa), el bug de reactividad reportado tiene una causa raíz identificada y corregida de forma coherente, y el `console.log` de diagnóstico se ha retirado.

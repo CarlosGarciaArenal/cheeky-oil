@@ -11,7 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { IonLabel, IonSegment, IonSegmentButton, SegmentCustomEvent } from '@ionic/angular/standalone';
+import { IonSelect, IonSelectOption, SelectCustomEvent } from '@ionic/angular/standalone';
 import * as L from 'leaflet';
 
 import { FuelPrices, GasStation } from '../../../core/models/gas-station.model';
@@ -126,7 +126,7 @@ const USER_ICON = L.divIcon({
   templateUrl: './map.component.html',
   styleUrl: './map.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonSegment, IonSegmentButton, IonLabel],
+  imports: [IonSelect, IonSelectOption],
 })
 export class MapComponent implements AfterViewInit, OnDestroy {
   @ViewChild('mapContainer', { static: true })
@@ -136,7 +136,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   protected readonly locationError = signal<string | null>(null);
   /** Mensaje de error de carga de gasolineras, mostrado de forma accesible bajo el mapa. */
   protected readonly stationsError = signal<string | null>(null);
-  /** Combustible seleccionado en el `ion-segment` (RF-03). Por defecto, Gasolina 95. */
+  /** Combustible seleccionado en el `ion-select` (RF-03). Por defecto, Gasolina 95. */
   protected readonly selectedFuel = signal<FuelKey>('gasolina95');
   protected readonly fuelLabels = FUEL_LABELS;
 
@@ -222,8 +222,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.stationsLayer = null;
   }
 
-  /** Handler del `(ionChange)` del `ion-segment`: solo actualiza la signal; `redraw()` se dispara solo vía el `effect` del constructor. */
-  protected onFuelChange(event: SegmentCustomEvent): void {
+  /** Handler del `(ionChange)` del `ion-select`: solo actualiza la signal; `redraw()` se dispara solo vía el `effect` del constructor. */
+  protected onFuelChange(event: SelectCustomEvent): void {
     const value = event.detail.value;
     if (value === 'gasolina95' || value === 'gasolina98' || value === 'diesel') {
       this.selectedFuel.set(value);
@@ -269,12 +269,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * descartadas del recorte inicial (ver `docs/features/04-filtros-combustible.md`).
    */
   private redraw(): void {
+    // `fuel` se lee SIEMPRE en la primera línea, antes de cualquier `return`
+    // anticipado. Un `effect()` solo registra como dependencia los signals
+    // que efectivamente se leen durante una ejecución dada: si el primer
+    // disparo del efecto (justo tras construirse el componente, con
+    // `origenCache` aún `null`) hubiera cortado en el guard de abajo sin
+    // llegar a leer `selectedFuel()`, Angular no habría registrado ninguna
+    // dependencia — y el efecto jamás se habría vuelto a ejecutar al
+    // cambiar de combustible después (el bug real reportado: el mapa se
+    // quedaba siempre con el combustible por defecto).
+    const fuel = this.selectedFuel();
     const origen = this.origenCache;
     if (!this.map || !this.stationsLayer || !origen) {
       return;
     }
-
-    const fuel = this.selectedFuel();
 
     const conCombustible = this.estacionesCache.filter((estacion) => estacion.precios[fuel] !== null);
 
@@ -282,14 +290,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       .map((estacion) => ({ estacion, distanciaKm: haversineDistanceKm(origen, estacion) }))
       .sort((a, b) => a.distanciaKm - b.distanciaKm)
       .slice(0, MAX_ESTACIONES_EN_MAPA);
-
-    // TODO(debug temporal): quitar tras confirmar con el usuario que el filtro
-    // de cercanía no es el causante de "faltan gasolineras" (ver auditoría en
-    // docs/features/03-capa-gasolineras.md).
-    console.log(
-      `Total gasolineras recibidas: ${this.estacionesCache.length}, ` +
-        `con ${FUEL_LABELS[fuel]}: ${conCombustible.length}, Total dibujadas: ${masCercanas.length}`,
-    );
 
     // Limpia los marcadores de una carga (o filtro) anterior antes de dibujar
     // los nuevos (evita acumular marcadores huérfanos).
