@@ -164,6 +164,47 @@ flowchart TD
 
 ---
 
+## Corrección de Fallos Visuales del Mapa
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivos modificados:**
+- `src/global.scss`
+- `angular.json`
+- `src/app/shared/components/map/map.component.ts`
+
+### Fallo 1 — CSS de Leaflet no aplicado correctamente
+
+El CSS de Leaflet (`node_modules/leaflet/dist/leaflet.css`) solo estaba referenciado desde el array `styles` de `angular.json`. Se ha movido a una importación explícita (`@import 'leaflet/dist/leaflet.css';`) al final de `src/global.scss`, junto al resto de imports de estilos globales de la app (mismo patrón que los imports de `@ionic/angular/css/*.css` ya existentes en ese archivo), en vez de quedar "escondido" en la configuración del builder.
+
+**Consecuencia de este cambio:** para no duplicar el CSS en el bundle (se cargaría dos veces: una vía `global.scss` y otra vía la entrada de `angular.json`), se ha **eliminado** `"node_modules/leaflet/dist/leaflet.css"` del array `styles` en `angular.json` (tanto en `architect.build` como en `architect.test`). La copia de los iconos del marcador (`assets/leaflet/*.png`) se mantiene sin cambios, ya que eso no depende de este import.
+
+### Fallo 2 — Controles de zoom en posición no deseada
+
+Se añadió `zoomControl: false` a las opciones de `L.map(...)` para desactivar el control de zoom por defecto (arriba a la izquierda), y se añade manualmente con `L.control.zoom({ position: 'bottomleft' }).addTo(this.map)` justo después de la capa de teselas. Se reubica abajo a la izquierda para no competir con la cabecera de marca (arriba) ni con futuros controles flotantes (ej. un FAB "centrar en mi ubicación") que previsiblemente irán abajo a la derecha.
+
+---
+
+## Auditoría de Corrección Visual [REVIEWER]
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/global.scss`
+- `angular.json`
+- `src/app/shared/components/map/map.component.ts`
+
+- [x] **CSS de Leaflet importado una única vez.** Confirmado `@import 'leaflet/dist/leaflet.css';` en `src/global.scss` y confirmado que ya NO existe ninguna referencia a `leaflet.css` en `angular.json` (evita doble inclusión / bundle duplicado).
+- [x] **`ng build --configuration development` verificado tras el cambio:** el bundle `styles.css` sigue generándose correctamente incluyendo las reglas `.leaflet-*` (comprobado que las clases de Leaflet, ej. `.leaflet-container`, aparecen en el CSS de salida).
+- [x] **Controles de zoom reubicados correctamente.** `zoomControl: false` en las opciones de `L.map(...)` desactiva el control por defecto; `L.control.zoom({ position: 'bottomleft' })` se añade explícitamente después de la capa de teselas, dentro de `ngAfterViewInit` — se destruye junto con el resto del mapa en `ngOnDestroy` (`this.map.remove()`), sin necesidad de limpieza adicional (Leaflet trata los controles como una capa más del mapa).
+- [x] **`tsc --noEmit`, `npm run lint` y `ng build`** ejecutados de nuevo tras el fix: sin errores.
+- [x] **Sin impacto en costes ni en la geolocalización:** cambio puramente visual/CSS, no toca `LocationService` ni añade lecturas/escrituras a Firebase.
+
+### Veredicto
+
+**Aprobado para commit.** Ambos fallos visuales corregidos; se eliminó además una duplicación de CSS que no se había detectado en la auditoría anterior.
+
+---
+
 ## Próximos pasos (fuera de alcance de este documento)
 
 - [UI-DEV] (futuro): usar `watchPosition()` para actualizar el marcador de "mi ubicación" en tiempo real (reutilizando el marcador con `setLatLng`, ver nota de la auditoría), y renderizar marcadores de `GasStation` sobre el mapa.

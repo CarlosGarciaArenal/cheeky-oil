@@ -35,3 +35,12 @@
 /* @import "@ionic/angular/css/palettes/dark.always.css"; */
 /* @import "@ionic/angular/css/palettes/dark.class.css"; */
 @import '@ionic/angular/css/palettes/dark.system.css';
+
+/**
+ * Leaflet (mapa)
+ * -----------------------------------------------------
+ * Requerido para que el mapa renderice correctamente (teselas, marcadores,
+ * controles de zoom). Sin este CSS, Leaflet se ve "roto" (teselas
+ * desalineadas/apiladas en la esquina superior izquierda).
+ */
+@import 'leaflet/dist/leaflet.css';

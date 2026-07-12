@@ -57,12 +57,18 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.map = L.map(this.mapContainerRef.nativeElement, {
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
+      zoomControl: false,
     });
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(this.map);
+
+    // Controles de zoom reubicados abajo a la izquierda para no tapar
+    // la cabecera de marca (arriba) ni futuros controles/FAB en la esquina
+    // inferior derecha (ej. botón "centrar en mi ubicación").
+    L.control.zoom({ position: 'bottomleft' }).addTo(this.map);
 
     this.locationService
       .getCurrentPosition()
