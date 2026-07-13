@@ -1,0 +1,65 @@
+<ion-content class="register" [fullscreen]="true" [scrollY]="false">
+  <div class="register__wrapper">
+    <img class="register__logo" src="assets/logo.svg" alt="Logotipo de Cheeky Oil" width="72" height="72" />
+    <h1 class="register__title">Crea tu cuenta familiar</h1>
+    <p class="register__subtitle">Necesitas el Código Familiar para unirte</p>
+
+    <form class="register__form" [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
+      <ion-list class="register__list" lines="full">
+        <ion-item>
+          <ion-input
+            label="Email"
+            labelPlacement="floating"
+            type="email"
+            formControlName="email"
+            autocomplete="email"
+            inputmode="email"
+            [errorText]="emailAlreadyInUse() ? 'Ya existe una cuenta con ese email.' : 'Introduce un email válido.'"
+            [class.ion-invalid]="(form.controls.email.touched && form.controls.email.invalid) || emailAlreadyInUse()"
+            [class.ion-touched]="form.controls.email.touched || emailAlreadyInUse()"
+          ></ion-input>
+        </ion-item>
+        <ion-item>
+          <ion-input
+            label="Contraseña"
+            labelPlacement="floating"
+            type="password"
+            formControlName="password"
+            autocomplete="new-password"
+            [errorText]="'La contraseña debe tener al menos 6 caracteres.'"
+            [class.ion-invalid]="form.controls.password.touched && form.controls.password.invalid"
+            [class.ion-touched]="form.controls.password.touched"
+          ></ion-input>
+        </ion-item>
+        <ion-item>
+          <ion-input
+            label="Código Familiar"
+            labelPlacement="floating"
+            type="text"
+            formControlName="familyCode"
+            autocomplete="off"
+            [errorText]="invalidFamilyCode() ? 'Código familiar incorrecto.' : 'El código familiar es obligatorio.'"
+            [class.ion-invalid]="(form.controls.familyCode.touched && form.controls.familyCode.invalid) || invalidFamilyCode()"
+            [class.ion-touched]="form.controls.familyCode.touched || invalidFamilyCode()"
+          ></ion-input>
+        </ion-item>
+      </ion-list>
+
+      @if (errorMessage()) {
+        <ion-text color="danger" class="register__error" role="alert">
+          <p>{{ errorMessage() }}</p>
+        </ion-text>
+      }
+
+      <ion-button class="register__submit" type="submit" expand="block" [disabled]="loading()">
+        @if (loading()) {
+          <ion-spinner name="crescent" aria-label="Creando cuenta..."></ion-spinner>
+        } @else {
+          Crear cuenta
+        }
+      </ion-button>
+
+      <a class="register__login-link" routerLink="/login">¿Ya tienes cuenta? Inicia sesión</a>
+    </form>
+  </div>
+</ion-content>

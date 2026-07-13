@@ -8,6 +8,14 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/login/login.page').then((m) => m.LoginPage),
   },
   {
+    // Sin `authGuard`, a propósito: hace falta poder registrarse sin sesión
+    // previa (es justo el punto de esta ruta). La única puerta real es el
+    // Código Familiar comprobado dentro de `AuthService.register()`, no el
+    // router (ver `[[05b-registro-seguro]]`).
+    path: 'register',
+    loadComponent: () => import('./pages/register/register.page').then((m) => m.RegisterPage),
+  },
+  {
     path: 'home',
     canActivate: [authGuard],
     loadComponent: () => import('./home/home.page').then((m) => m.HomePage),

@@ -4,6 +4,7 @@ import { RouteReuseStrategy, provideRouter, withPreloading, PreloadAllModules } 
 import { IonicRouteStrategy, provideIonicAngular } from '@ionic/angular/standalone';
 import { provideFirebaseApp, initializeApp } from '@angular/fire/app';
 import { provideAuth, getAuth } from '@angular/fire/auth';
+import { provideFirestore, getFirestore } from '@angular/fire/firestore';
 
 import { routes } from './app.routes';
 import { environment } from '../environments/environment';
@@ -16,5 +17,6 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(),
     provideFirebaseApp(() => initializeApp(environment.firebaseConfig)),
     provideAuth(() => getAuth()),
+    provideFirestore(() => getFirestore()),
   ],
 };

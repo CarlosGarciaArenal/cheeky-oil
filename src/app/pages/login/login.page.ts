@@ -1,22 +1,22 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { IonButton, IonContent, IonInput, IonItem, IonList, IonSpinner, IonText } from '@ionic/angular/standalone';
 
 import { AuthService } from '../../core/services/auth.service';
 
 /**
- * Formulario mínimo de acceso (email/password). Sin registro ni "recuperar
- * contraseña": es una app personal/familiar (ver `CLAUDE.md`), las cuentas
- * se crean manualmente desde la consola de Firebase, no hace falta
- * autoservicio de alta.
+ * Formulario mínimo de acceso (email/password). El registro de cuenta nueva
+ * vive en `RegisterPage` (RF-10, `[[05b-registro-seguro]]`), enlazada desde
+ * aquí — ya no es "solo alta manual desde consola" como en la versión
+ * original de esta página.
  */
 @Component({
   selector: 'app-login',
   templateUrl: './login.page.html',
   styleUrl: './login.page.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, IonContent, IonButton, IonInput, IonItem, IonList, IonSpinner, IonText],
+  imports: [ReactiveFormsModule, RouterLink, IonContent, IonButton, IonInput, IonItem, IonList, IonSpinner, IonText],
 })
 export class LoginPage {
   private readonly authService = inject(AuthService);

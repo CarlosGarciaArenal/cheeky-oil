@@ -1,4 +1,4 @@
-.login__wrapper {
+.register__wrapper {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -8,44 +8,44 @@
   text-align: center;
 }
 
-.login__logo {
+.register__logo {
   border-radius: 18px;
   margin-bottom: 12px;
 }
 
-.login__title {
+.register__title {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 700;
 }
 
-.login__subtitle {
+.register__subtitle {
   margin: 4px 0 28px;
   color: var(--ion-color-medium);
 }
 
-.login__form {
+.register__form {
   width: 100%;
   max-width: 360px;
   text-align: initial;
 }
 
-.login__list {
+.register__list {
   background: transparent;
   margin-bottom: 4px;
 }
 
-.login__error {
+.register__error {
   display: block;
   margin: 8px 4px 4px;
   font-size: 0.875rem;
 }
 
-.login__submit {
+.register__submit {
   margin-top: 20px;
 }
 
-.login__register-link {
+.register__login-link {
   display: block;
   margin-top: 16px;
   text-align: center;

@@ -18,6 +18,7 @@
 | **RF-07** | **Sincronización Familiar** | Sistema de cuentas o "grupo familiar" que comparta la misma base de datos de gasolineras guardadas y alertas, sincronizando notificaciones entre los miembros. |
 | **RF-08** | **Alertas en Rutas Frecuentes** | Capacidad de configurar trayectos habituales (ej. "Casa-Trabajo") para que el sistema notifique la estación más barata específicamente dentro de esa ruta. |
 | **RF-09** | **Semáforo de Repostaje** | Indicador visual algorítmico (Verde = Buen momento para repostar, Ámbar = Esperar si es posible, Rojo = Precio en pico) basado en la media histórica de las gasolineras guardadas. |
+| **RF-10** | **Registro Seguro (Código Familiar)** | Pantalla de registro (email + contraseña + "Código Familiar") que solo crea la cuenta si el código introducido coincide con el configurado por el administrador familiar en Firestore. Ver `docs/features/05b-registro-seguro.md`. *(Nota: se numera RF-10, no RF-05, para no colisionar con el RF-05 "Radar Inteligente" ya existente — el nombre "RF-05" se usó de forma informal al pedir esta feature.)* |
 
 ---
 
@@ -32,3 +33,4 @@
 | **RNF-05** | **Modos de Visualización** | El sistema debe incluir un botón accesible para alternar manualmente entre **Modo Claro** y **Modo Oscuro**, además de respetar la preferencia del sistema operativo por defecto. |
 | **RNF-06** | **Privacidad y Cumplimiento Legal (GDPR)** | Los datos de ubicación GPS se procesarán estrictamente en el dispositivo. No se cederán datos a terceros. Se incluirá un aviso claro de privacidad, cookies y uso de datos gubernamentales según marca la ley. |
 | **RNF-07** | **Seguridad** | Las reglas de seguridad de Firebase (Security Rules) deben bloquear el acceso público, permitiendo solo a los usuarios autenticados del grupo familiar leer y escribir los datos de sus gasolineras guardadas. |
+| **RNF-08** | **Registro Controlado por Código Familiar** | El alta de nuevas cuentas (`createUserWithEmailAndPassword`) debe exigir un "Código Familiar" que se valida contra el documento `config/security` en Firestore (campo `familyCode`) **antes** de crear la cuenta; si no coincide, el registro se rechaza. Ver justificación de sus límites reales de seguridad (validación en cliente, no un límite de acceso a datos) en `docs/features/05b-registro-seguro.md`. |
