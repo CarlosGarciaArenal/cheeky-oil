@@ -1,0 +1,16 @@
+// Copia este archivo a `environment.prod.ts` (sin `.example`) y rellena los
+// valores reales de tu proyecto Firebase. `environment.prod.ts` está en
+// `.gitignore`: no se sube al repo.
+
+export const environment = {
+  production: true,
+  firebaseConfig: {
+    apiKey: '',
+    authDomain: '',
+    projectId: '',
+    storageBucket: '',
+    messagingSenderId: '',
+    appId: '',
+    measurementId: '',
+  },
+};

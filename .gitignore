@@ -84,6 +84,14 @@ node_modules/
 firebase-debug.log
 .firebase/
 
+# Config de Firebase por entorno: no se trackea por higiene (la apiKey ya está
+# restringida por referrer en Google Cloud Console, así que no es un secreto
+# real, pero mantenerla fuera de un repo público evita que scrapers/bots la
+# recojan sin necesidad). Cada entorno local necesita su copia a partir de
+# environment.ts.example / environment.prod.ts.example.
+src/environments/environment.ts
+src/environments/environment.prod.ts
+
 # Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db
