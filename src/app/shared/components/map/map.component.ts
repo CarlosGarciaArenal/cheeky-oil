@@ -164,6 +164,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    */
   private estacionesCache: GasStation[] = [];
   private origenCache: Coordinates | null = null;
+  /** Temporizador del fix de `invalidateSize()` (ver `ngAfterViewInit`), para poder cancelarlo en `ngOnDestroy` si el componente se destruye antes de que dispare. */
+  private invalidateSizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     // Reactividad del filtro: `redraw()` lee la signal `selectedFuel` en su
@@ -184,6 +186,17 @@ export class MapComponent implements AfterViewInit, OnDestroy {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19,
     }).addTo(this.map);
+
+    // Bug clásico de Leaflet: si al crear el mapa el contenedor todavía no
+    // tiene su tamaño final resuelto (transición de entrada de Ionic, layout
+    // asentándose), Leaflet calcula mal las dimensiones y los tiles quedan en
+    // blanco hasta que el usuario redimensiona la ventana. `invalidateSize()`
+    // le fuerza a releer el tamaño real del contenedor y repintar. `this.map`
+    // se comprueba con `?.` porque el componente pudo destruirse (`ngOnDestroy`
+    // pone `this.map = null`) antes de que este timeout llegue a disparar.
+    this.invalidateSizeTimeoutId = setTimeout(() => {
+      this.map?.invalidateSize();
+    }, 400);
 
     // Controles de zoom reubicados abajo a la izquierda para no tapar
     // la cabecera de marca (arriba) ni futuros controles/FAB en la esquina
@@ -216,6 +229,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * los trata como una capa más, igual que el control de zoom.
    */
   ngOnDestroy(): void {
+    if (this.invalidateSizeTimeoutId !== null) {
+      clearTimeout(this.invalidateSizeTimeoutId);
+      this.invalidateSizeTimeoutId = null;
+    }
     this.map?.remove();
     this.map = null;
     this.userMarker = null;

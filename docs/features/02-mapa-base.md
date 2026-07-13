@@ -205,7 +205,55 @@ Se añadió `zoomControl: false` a las opciones de `L.map(...)` para desactivar 
 
 ---
 
+## Corrección: renderizado en blanco al cargar (bug clásico de `invalidateSize`)
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.ts`
+
+### El problema
+
+Al entrar en la pantalla del mapa, las teselas de OpenStreetMap a veces no se pintaban hasta que el usuario redimensionaba la ventana (ej. abrir/cerrar las DevTools con F12). Es un bug muy conocido de Leaflet: si el contenedor del mapa (`mapContainer`) todavía no tiene su tamaño final resuelto en el momento exacto en que se llama a `L.map(...)` — por ejemplo, mientras la transición de entrada de página de Ionic todavía está animando o el layout aún se está asentando — Leaflet calcula mal las dimensiones internas y deja de pedir/pintar los tiles que quedan fuera de ese cálculo erróneo. Redimensionar la ventana fuerza a Leaflet a recalcular y por eso "arregla" el síntoma manualmente.
+
+### La corrección
+
+```ts
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { ... }).addTo(this.map);
+
+this.invalidateSizeTimeoutId = setTimeout(() => {
+  this.map?.invalidateSize();
+}, 400);
+```
+
+1. **`invalidateSize()`** es el método que el propio Leaflet expone para este caso exacto: le fuerza a releer el tamaño real del contenedor del DOM y repintar los tiles en consecuencia — es la solución recomendada por la documentación/comunidad de Leaflet para este síntoma, no un workaround improvisado.
+2. **`setTimeout(..., 400)` en vez de llamarlo síncronamente justo después de crear el mapa.** Si se llamara inmediatamente, el contenedor todavía podría no tener su tamaño final (el mismo problema que se intenta arreglar), porque las transiciones de entrada de `ion-router-outlet` no son instantáneas. 400ms da margen de sobra a que la transición de Ionic haya terminado y el layout esté asentado.
+3. **`this.map?.invalidateSize()` (con `?.`, no `this.map.invalidateSize()`).** El campo `map` es `L.Map | null`; TypeScript en modo estricto no permite llamar a un método sobre un valor potencialmente `null` sin comprobarlo. Además, es una comprobación real y necesaria: el componente puede destruirse (navegar fuera de `/home`) dentro de esos 400ms, y `ngOnDestroy` ya pone `this.map = null` — sin el `?.`, el timeout intentaría llamar a `invalidateSize()` sobre `null` y lanzaría una excepción.
+4. **`invalidateSizeTimeoutId` guardado como campo y cancelado en `ngOnDestroy` con `clearTimeout`.** Sin esto, el temporizador seguiría vivo (aunque inofensivo gracias al `?.` del punto anterior) hasta que dispararan sus 400ms, manteniendo una referencia a la instancia del componente en memoria durante ese margen tras destruirse — un caso acotado y menor, pero coherente con la regla estricta de "Destrucción de Recursos" de `CLAUDE.md`, ya aplicada en este mismo componente a `map.remove()` y a la suscripción de `getCurrentPosition()`.
+
+---
+
+## Auditoría de la Corrección [REVIEWER]
+
+**Rol:** [REVIEWER]
+**Archivo auditado:**
+- `src/app/shared/components/map/map.component.ts`
+
+- [x] **El `setTimeout` se añade justo después de `tileLayer(...).addTo(this.map)`**, tal como se pidió — antes de añadir el control de zoom y la capa de estaciones, sin alterar el orden de inicialización existente.
+- [x] **Sin fuga de memoria ni excepción tras destruir el componente antes de los 400ms.** `ngOnDestroy` cancela el temporizador con `clearTimeout(this.invalidateSizeTimeoutId)` **antes** de poner `this.map = null` — y aunque no lo cancelara, el callback usa `this.map?.invalidateSize()`, que no lanzaría sobre `null`. Doble protección: el timer ni siquiera llega a disparar tras destruirse (caso normal), y si por algún orden de ejecución llegara a hacerlo, el optional chaining lo neutraliza igualmente.
+- [x] **Tipado estricto respetado.** `invalidateSizeTimeoutId: ReturnType<typeof setTimeout> | null` evita el uso de `any` o de un tipo específico de Node (`NodeJS.Timeout`) que no sería correcto en un proyecto que compila para navegador.
+- [x] **Sin llamadas a Firestore/Cloud Functions ni cambios en `LocationService`:** impacto en costes = 0. Cambio puramente de temporización en el cliente.
+- [x] **`ng build --configuration development` y `npm run lint`** ejecutados tras el cambio: sin errores.
+- [ ] ⚠️ **No verificado con una repetición exacta del bug original (no reproducible de forma fiable en un navegador headless con viewport fijo, ya que la condición de carrera depende del tiempo real de layout/transición en un dispositivo).** La corrección se valida por revisión de código (patrón estándar y documentado de Leaflet para este síntoma exacto) y porque no introduce ninguna regresión en el resto del ciclo de vida del componente (build/lint limpios, misma disciplina de limpieza de recursos ya auditada en este documento). Se recomienda al usuario confirmar manualmente en un dispositivo real que el mapa ya no queda en blanco al entrar en la app sin redimensionar la ventana.
+
+### Veredicto final
+
+**Aprobado para commit.** El fix usa la API oficial de Leaflet para este problema, respeta el tipado estricto del proyecto, y no introduce fugas de memoria ni excepciones ante una destrucción temprana del componente — con el `clearTimeout` en `ngOnDestroy` añadido durante esta misma revisión (no estaba en el snippet original propuesto, que solo llamaba a `invalidateSize()` sin gestionar el ciclo de vida del temporizador).
+
+---
+
 ## Próximos pasos (fuera de alcance de este documento)
 
 - [UI-DEV] (futuro): usar `watchPosition()` para actualizar el marcador de "mi ubicación" en tiempo real (reutilizando el marcador con `setLatLng`, ver nota de la auditoría), y renderizar marcadores de `GasStation` sobre el mapa.
 - [REVIEWER] (futuro): revisar cobertura de tests unitarios de `LocationService`/`MapComponent` cuando se añadan.
+- [Usuario]: confirmar en un dispositivo/navegador real que el mapa ya no se queda en blanco al entrar sin redimensionar la ventana (ver nota no bloqueante de la auditoría de esta corrección).
