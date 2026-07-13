@@ -7,6 +7,14 @@
           <span class="brand__name">Cheeky Oil</span>
         </div>
       </ion-title>
+
+      @if (authService.currentUser()) {
+        <ion-buttons slot="end">
+          <ion-button (click)="onLogout()" aria-label="Cerrar sesión">
+            <ion-icon slot="icon-only" name="log-out-outline"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      }
     </ion-toolbar>
   </ion-header>
 
