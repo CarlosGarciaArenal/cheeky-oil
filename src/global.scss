@@ -113,6 +113,51 @@
   font-size: 0.85rem;
 }
 
+/*
+ * Botón "⭐ Guardar" / "Quitar ⭐" (RF-04, `map.component.ts`). Vive fuera
+ * del árbol de Angular igual que el resto del popup (ver comentario de
+ * cabecera de esta sección): el click lo intercepta `onPopupOpen` con
+ * `addEventListener`, no un `(click)` de plantilla.
+ */
+.gas-station-popup__fav-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid #c2410c;
+  border-radius: 8px;
+  background: transparent;
+  color: #7a2e0e;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  /* Toca el mismo tono de fondo del popup para no depender de un color de foco/hover distinto por tema. */
+  transition: background-color 0.15s ease-in-out;
+}
+
+.gas-station-popup__fav-btn:hover {
+  background: rgba(194, 65, 12, 0.12);
+}
+
+.gas-station-popup__fav-btn:focus-visible {
+  outline: 2px solid #c2410c;
+  outline-offset: 2px;
+}
+
+.gas-station-popup__fav-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.gas-station-popup__fav-btn--active {
+  background: #c2410c;
+  color: #fff4ec;
+}
+
+.gas-station-popup__fav-btn--active:hover {
+  background: #a3390d;
+}
+
 @media (prefers-color-scheme: dark) {
   .gas-station-popup .leaflet-popup-content-wrapper,
   .gas-station-popup .leaflet-popup-tip {
@@ -131,5 +176,27 @@
   .gas-station-popup .leaflet-popup-close-button:hover,
   .gas-station-popup .leaflet-popup-close-button:focus {
     color: #ffffff;
+  }
+
+  .gas-station-popup__fav-btn {
+    border-color: #ff8a5b;
+    color: #ffd9b8;
+  }
+
+  .gas-station-popup__fav-btn:hover {
+    background: rgba(255, 138, 91, 0.16);
+  }
+
+  .gas-station-popup__fav-btn:focus-visible {
+    outline-color: #ff8a5b;
+  }
+
+  .gas-station-popup__fav-btn--active {
+    background: #ff8a5b;
+    color: #2b1c12;
+  }
+
+  .gas-station-popup__fav-btn--active:hover {
+    background: #ff9d70;
   }
 }
