@@ -1,5 +1,5 @@
 import { Component, inject } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import {
   IonApp,
   IonButton,
@@ -11,7 +11,7 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { logOutOutline } from 'ionicons/icons';
+import { logOutOutline, starOutline } from 'ionicons/icons';
 
 import { AuthService } from './core/services/auth.service';
 
@@ -19,7 +19,7 @@ import { AuthService } from './core/services/auth.service';
   selector: 'app-root',
   templateUrl: 'app.component.html',
   styleUrl: 'app.component.scss',
-  imports: [IonApp, IonRouterOutlet, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon],
+  imports: [IonApp, IonRouterOutlet, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon, RouterLink],
 })
 export class AppComponent {
   /** `protected` (no `private`) a propósito: la plantilla lo lee directamente (`@if (authService.currentUser())`) para mostrar el botón de cerrar sesión solo cuando hay sesión activa. */
@@ -27,7 +27,7 @@ export class AppComponent {
   private readonly router = inject(Router);
 
   constructor() {
-    addIcons({ logOutOutline });
+    addIcons({ logOutOutline, starOutline });
   }
 
   protected async onLogout(): Promise<void> {

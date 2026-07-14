@@ -10,6 +10,9 @@
 
       @if (authService.currentUser()) {
         <ion-buttons slot="end">
+          <ion-button routerLink="/favoritos" aria-label="Mis gasolineras favoritas">
+            <ion-icon slot="icon-only" name="star-outline"></ion-icon>
+          </ion-button>
           <ion-button (click)="onLogout()" aria-label="Cerrar sesión">
             <ion-icon slot="icon-only" name="log-out-outline"></ion-icon>
           </ion-button>

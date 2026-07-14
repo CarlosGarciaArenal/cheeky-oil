@@ -23,6 +23,15 @@ export interface FuelPrices {
 }
 
 /**
+ * Claves de combustible disponibles en `FuelPrices`. Tipo compartido (en vez
+ * de que cada consumidor declare su propio `keyof FuelPrices` local, como ya
+ * hacía `MapComponent` con su `FuelKey` privado) para que RF-04
+ * (`FavoritesService.getFavoritesWithPrices`, ver `[[06-favoritos]]`) y el
+ * mapa filtren por el mismo tipo de combustible sin dos fuentes de verdad.
+ */
+export type FuelType = keyof FuelPrices;
+
+/**
  * Documento raíz de la colección `gasStations` en Firestore.
  * `id` coincide con el ID oficial de la estación (fuente: API pública del
  * Ministerio para Transición Ecológica), evitando así IDs autogenerados

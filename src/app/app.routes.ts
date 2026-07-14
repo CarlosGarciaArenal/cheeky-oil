@@ -21,6 +21,14 @@ export const routes: Routes = [
     loadComponent: () => import('./home/home.page').then((m) => m.HomePage),
   },
   {
+    // Protegida igual que `home`: `FavoritesPanelPage` depende de una sesión
+    // activa (`FavoritesService`), así que no tiene sentido como ruta pública.
+    path: 'favoritos',
+    canActivate: [authGuard],
+    loadComponent: () =>
+      import('./pages/favorites-panel/favorites-panel.page').then((m) => m.FavoritesPanelPage),
+  },
+  {
     // Sin sesión, `authGuard` intercepta esta redirección y desvía a `/login`
     // (ver `auth.guard.ts`): la ruta por defecto resultante es el login
     // cuando no hay usuario autenticado, y el mapa cuando sí lo hay.

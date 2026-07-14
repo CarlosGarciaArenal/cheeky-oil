@@ -1,0 +1,159 @@
+.favorites-panel__wrapper {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 8px 16px 32px;
+}
+
+.favorites-panel__back {
+  margin: 0 0 4px -8px;
+}
+
+.favorites-panel__title {
+  margin: 4px 0 16px;
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.favorites-panel__fuel-filter {
+  width: 100%;
+  max-width: 260px;
+  margin-bottom: 20px;
+}
+
+.favorites-panel__state {
+  padding: 32px 8px;
+  text-align: center;
+  color: var(--ion-color-medium);
+}
+
+.favorites-panel__state-hint {
+  font-size: 0.875rem;
+  margin-top: 4px;
+}
+
+.favorites-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * Fondo/borde con las variables de tema de Ionic (`--ion-color-step-50`,
+ * `--ion-text-color`), no colores fijos: `dark.system.css` (ya importado en
+ * `global.scss`) las adapta solas a modo oscuro sin duplicar reglas aquí —
+ * a diferencia del popup del mapa (`global.scss`), esta tarjeta SÍ vive
+ * dentro del árbol de Angular y recibe la cascada normal de estilos.
+ */
+.favorite-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ion-color-step-50, #f4f4f4);
+  border: 1px solid var(--ion-color-step-100, #e0e0e0);
+}
+
+.favorite-card__badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.favorite-card__badge ion-icon {
+  font-size: 1rem;
+}
+
+/*
+ * Verde/rojo elegidos y verificados para texto (no solo fondo de botón,
+ * donde los `--ion-color-success`/`--ion-color-danger` por defecto de Ionic
+ * ya son suficientes): sobre el fondo claro de `--cheapest`/`--most-expensive`
+ * de abajo, ambos pares superan holgadamente el contraste WCAG AA de 4.5:1
+ * para texto normal (mismo criterio ya aplicado en `variables.scss` al
+ * color de marca).
+ */
+.favorite-card__badge--cheapest {
+  color: #166534;
+}
+
+.favorite-card__badge--most-expensive {
+  color: #991b1b;
+}
+
+.favorite-card--cheapest {
+  border-color: #166534;
+  background: #f0fdf4;
+}
+
+.favorite-card--most-expensive {
+  border-color: #991b1b;
+  background: #fef2f2;
+}
+
+.favorite-card__body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.favorite-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.favorite-card__marca {
+  font-size: 1rem;
+}
+
+.favorite-card__direccion {
+  font-size: 0.85rem;
+  color: var(--ion-color-medium);
+}
+
+.favorite-card__precio {
+  flex-shrink: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.favorite-card__precio--indisponible {
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: var(--ion-color-medium);
+}
+
+.favorite-card__remove {
+  align-self: flex-end;
+  margin: -4px -8px -4px 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .favorite-card__badge--cheapest {
+    color: #86efac;
+  }
+
+  .favorite-card__badge--most-expensive {
+    color: #fca5a5;
+  }
+
+  .favorite-card--cheapest {
+    border-color: #166534;
+    background: rgba(34, 197, 94, 0.12);
+  }
+
+  .favorite-card--most-expensive {
+    border-color: #991b1b;
+    background: rgba(239, 68, 68, 0.12);
+  }
+}

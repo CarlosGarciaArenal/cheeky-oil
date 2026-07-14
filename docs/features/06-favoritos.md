@@ -252,3 +252,199 @@ Metodología: revisión de código línea a línea + trazado manual de las rutas
 ### Veredicto final
 
 **Aprobado para commit.** Las dos preguntas encargadas quedan respondidas con evidencia de código, no solo lectura superficial: (1) el acceso sin sesión está protegido en los tres métodos de `FavoritesService` — se encontró y corrigió una inconsistencia real de robustez en `getFavorites()` (excepción síncrona en vez de error de `Observable`) que podía dejar el mapa entero sin cargar de forma silenciosa ante una sesión ausente, con `Explotabilidad real hoy: baja` pero corregida igualmente antes de este commit; (2) no existe memory leak en el manejo de clics del popup, confirmado trazando el ciclo de vida real de marcadores/popups en el propio código fuente de Leaflet, no solo asumiéndolo. Quedan dos pendientes explícitos y no bloqueantes (verificación E2E con cuenta real, y Firestore Security Rules), ambos ya heredados de auditorías anteriores de este mismo proyecto y no agravados por esta feature.
+
+---
+
+## Monitorización y Comparación: precio en vivo de los favoritos (RF-04)
+
+**Rol:** [ARQUITECTO]
+**Estado:** Diseño + implementación base (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivos modificados:**
+- `src/app/core/services/favorites.service.ts` — nuevo método `getFavoritesWithPrices(combustibleType)` + helpers privados `mergeWithPrices`/`markExtremes`.
+- `src/app/core/models/favorite.model.ts` — nueva interfaz `FavoriteWithPrice`; corregido un comentario desactualizado de `Favorite` (ver punto 5 de diseño).
+- `src/app/core/models/gas-station.model.ts` — nuevo tipo exportado `FuelType = keyof FuelPrices`.
+
+### Qué hace
+
+`FavoritesService.getFavoritesWithPrices(combustibleType)` completa RF-04 con la parte de "monitorización y comparación": devuelve un `Observable<FavoriteWithPrice[]>` con los favoritos del usuario, cada uno con el precio de HOY del combustible pedido y dos flags (`isCheapest`/`isMostExpensive`) que identifican cuál/cuáles son más baratos y más caros **dentro del propio conjunto de favoritos** — no una comparación global contra las ~11.500 estaciones de España, sino "de mis gasolineras guardadas, ¿cuál me sale mejor hoy?".
+
+### El cruce de datos: Firestore (IDs guardados) × MITECO (precios en vivo)
+
+Los favoritos y los precios viven en dos sistemas completamente distintos, y a propósito no se mezclan en un solo documento:
+
+- **Firestore (`users/{uid}/favorites`)** solo sabe QUÉ gasolineras ha guardado el usuario — id (IDEESS), marca, dirección, municipio, coordenadas. **Nunca** un precio (ver `[[06-favoritos]]`, sección Justificación de Diseño, punto 3): los precios cambian a diario y guardarlos en Firestore obligaría a reescribir el documento de cada favorito de cada usuario en cada sincronización.
+- **MITECO (`MitecoService.getEstaciones()`)** es la única fuente de precios "de hoy" que usa la app — una petición HTTP pública y gratuita que devuelve las ~11.500 estaciones de España con sus precios actuales, sin persistirlas en ningún sitio (ver `[[03-capa-gasolineras]]`).
+
+`getFavoritesWithPrices` une ambos mundos **en memoria, en el momento de la consulta**, por el único campo que ambos comparten: `id` (el código IDEESS, idéntico en `Favorite.id` y `GasStation.id` por diseño desde `[[01-modelos-base]]`).
+
+```mermaid
+flowchart TD
+    A["getFavoritesWithPrices(combustibleType)"] --> B["combineLatest([...])"]
+    B --> C["getFavorites()\nFirestore: users/uid/favorites\n(listener en vivo, máx. 10 docs)"]
+    B --> D["mitecoService.getEstaciones()\nHTTP: API MITECO\n(~11.500 estaciones, 1 sola petición)"]
+
+    C --> E["Favorite[]\nid, marca, direccion, municipio, lat, lng, guardadoEn\n(SIN precio)"]
+    D --> F["GasStation[]\nid, marca, direccion, municipio, precios{gasolina95/98,diesel}, lat, lng"]
+
+    E --> G["mergeWithPrices(favoritos, estaciones, combustibleType)"]
+    F --> G
+
+    G --> H["new Map(estaciones.map(e => [e.id, e.precios[combustibleType]]))\n(búsqueda O(1) por id, no O(favoritos × 11.500))"]
+    H --> I["favoritos.map(f => ({ ...f, precio: preciosPorId.get(f.id) ?? null, isCheapest: false, isMostExpensive: false }))"]
+    I --> J["markExtremes(favoritosConPrecio)\n(in-place, ver reglas de empate abajo)"]
+    J --> K["Observable<FavoriteWithPrice[]>\nemitido al consumidor (ej. pantalla de favoritos)"]
+
+    D -.->|"favorito guardado pero id YA NO aparece\nen la respuesta de MITECO (estación cerrada)"| L["precio: null\n(nunca candidato a isCheapest/isMostExpensive)"]
+```
+
+### Justificación de Diseño (ARQUITECTO)
+
+1. **`combineLatest`, no `switchMap` ni una combinación manual con `firstValueFrom`.** `getFavorites()` es un listener EN VIVO que puede volver a emitir en cualquier momento (el usuario añade/quita un favorito mientras tiene esta pantalla abierta); `getEstaciones()` es un `Observable` que se completa tras su única emisión HTTP. `combineLatest` conserva el último valor conocido de cada fuente y recalcula el cruce cuando CUALQUIERA de las dos cambia — en la práctica, cuando cambian los favoritos, se reutiliza el precio ya descargado (sin una segunda petición HTTP a MITECO); no hay forma de que cambien los precios sin que el usuario vuelva a suscribirse (ver punto 4).
+2. **El cruce es por `id` con un `Map`, no un `.find()` anidado.** Con hasta 10 favoritos y ~11.500 estaciones, un `favoritos.map(f => estaciones.find(e => e.id === f.id))` sería O(favoritos × estaciones) ≈ 115.000 comparaciones en el peor caso. Construir `preciosPorId` una sola vez (`new Map(...)`, O(estaciones)) y consultarlo por favorito (O(1) cada uno) baja el coste total a O(favoritos + estaciones) ≈ 11.510 — mismo criterio de eficiencia ya aplicado por `MapComponent.estacionesPorId` (`[[06-favoritos]]`, sección UI-DEV).
+3. **`precio: null` cuando el favorito ya no aparece en la respuesta de MITECO, en vez de excluirlo del array o lanzar un error.** Una gasolinera guardada puede cerrar o dejar de reportar precios sin que el usuario la haya quitado de favoritos — el array devuelto sigue mostrando TODOS los favoritos (para que la UI pueda, por ejemplo, avisar "sin precio disponible" en vez de hacerla desaparecer silenciosamente), y ese `null` queda automáticamente excluido de `markExtremes` (punto 4 de abajo) para no distorsionar la comparación con un precio inexistente.
+4. **`markExtremes` marca TODOS los empates en cada extremo, no solo "el primero que encuentra".** Con como mucho 10 favoritos, un empate de precio entre dos gasolineras de la misma zona es un caso real y no raro (mismo grupo, mismo pueblo). Elegir arbitrariamente una sola como "la más barata" cuando dos cuestan literalmente lo mismo sería engañoso. Regla explícita y documentada en el propio código (`markExtremes`): con 0 o 1 favoritos con precio no se marca nada (nada que comparar); si TODOS los favoritos con precio coinciden en el mismo valor (empate total), tampoco se marca nada (no hay un "más barato" frente a un "más caro" cuando todo cuesta igual); en cualquier otro caso, se marcan TODOS los que empatan en el mínimo y TODOS los que empatan en el máximo — pueden coexistir varios `isCheapest: true` a la vez.
+5. **`FavoriteWithPrice` es una interfaz nueva, aparte de `Favorite`, que nunca se persiste.** Es una vista calculada en memoria (Firestore + MITECO combinados), no un documento — mezclar sus campos (`precio`, `isCheapest`, `isMostExpensive`) dentro de `Favorite` habría sido fácil de confundir con datos que sí se guardan en Firestore. `extends Favorite` reutiliza los campos ya definidos sin duplicarlos a mano. Aprovechando este cambio, se corrigió también el comentario de cabecera de `Favorite`, que aún decía "se leen siempre en vivo desde `gasStations`" — esa colección de Firestore no existe todavía en el proyecto (sigue siendo trabajo futuro de `[[03-capa-gasolineras]]`); hoy el cruce es directamente contra `MitecoService.getEstaciones()` (HTTP), no contra Firestore. El comentario ya estaba desactualizado antes de esta feature; se corrige ahora porque es exactamente el dato que este método necesitaba dejar claro.
+6. **`FuelType` se extrae como tipo exportado (`gas-station.model.ts`) en vez de que `FavoritesService` declare su propio `keyof FuelPrices` local.** `MapComponent` ya tenía un `type FuelKey = keyof FuelPrices` privado (`[[06-favoritos]]`, sección UI-DEV) — con dos consumidores del mismo concepto (mapa y favoritos), mantenerlo como un tipo local duplicado en cada archivo es una fuente de verdad innecesariamente repetida. **Nota para un ciclo futuro de `[[UI-DEV]]`:** `map.component.ts` podría importar este `FuelType` en vez de mantener su propio `FuelKey` local (son estructuralmente idénticos); no se ha tocado ese archivo en este ciclo por no ser parte del encargo, pero queda anotado para evitar la duplicación a medio plazo.
+
+### Seguridad y Costes (resumen ARQUITECTO, pendiente de auditoría [REVIEWER] formal)
+
+- **Coste por suscripción a `getFavoritesWithPrices`:** 1 petición HTTP a la API pública de MITECO (gratuita, sin cuota — igual que `[[03-capa-gasolineras]]`) + el listener de Firestore ya acotado de `getFavorites()` (hasta 10 lecturas iniciales, 1 por cambio real). El cruce y el marcado de extremos ocurren enteramente en memoria del cliente — cero lecturas/escrituras adicionales de Firestore.
+- **Coste si se llama repetidamente:** cada nueva suscripción a `getFavoritesWithPrices` (no cada emisión dentro de una suscripción ya activa) vuelve a pedir las ~11.500 estaciones a MITECO, porque `mitecoService.getEstaciones()` no cachea entre llamadas (mismo comportamiento ya documentado en `[[03-capa-gasolineras]]`: cachear es responsabilidad del consumidor, como ya hace `MapComponent.estacionesCache`). **Recomendación explícita para quien consuma este método (`[[UI-DEV]]`, fuera de este documento):** suscribirse una única vez por vista (ej. al entrar en una pantalla de comparación), no dentro de un `effect()` o un binding que se reevalúe en cada cambio de combustible — para cambiar de combustible sin una segunda descarga, lo correcto es cachear `GasStation[]` igual que ya hace el mapa y volver a llamar solo a `mergeWithPrices` (hoy privado; si esta necesidad se confirma, un ciclo futuro de ARQUITECTO podría exponer una variante que reciba las estaciones ya cacheadas en vez de volver a pedirlas).
+- **Sin APIs de pago ni credenciales nuevas.** Reutiliza `MitecoService`/`FavoritesService` ya existentes y auditados.
+- **Sin fugas de memoria nuevas:** `getFavoritesWithPrices` no mantiene ningún estado propio ni suscripción interna — es responsabilidad de quien la consuma gestionar su ciclo de vida (`takeUntilDestroyed`), igual que ya se exige para `getFavorites()`.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[UI-DEV]**: pantalla de "Mis gasolineras" que consuma `getFavoritesWithPrices(combustibleType)`...~~ **Hecho, ver sección [UI-DEV] más abajo.**
+- **[UI-DEV] (futuro, opcional):** unificar `map.component.ts`'s `FuelKey` local con el nuevo `FuelType` exportado (ver punto 6 de diseño).
+- **[REVIEWER]**: auditoría formal de este método antes de commit — en particular, confirmar el análisis de coste de suscripciones repetidas (punto de "Seguridad y Costes" de arriba) y las reglas de empate de `markExtremes`.
+
+---
+
+## Panel de favoritos: pantalla y navegación (RF-04)
+
+**Rol:** [UI-DEV]
+**Estado:** Implementado (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivos generados:**
+- `src/app/pages/favorites-panel/favorites-panel.page.ts`
+- `src/app/pages/favorites-panel/favorites-panel.page.html`
+- `src/app/pages/favorites-panel/favorites-panel.page.scss`
+
+**Archivos modificados:**
+- `src/app/app.routes.ts` — nueva ruta `/favoritos` (lazy, protegida por `authGuard`, mismo criterio que `home`).
+- `src/app/app.component.ts` / `.html` — nuevo botón ⭐ en la cabecera global, junto al de cerrar sesión.
+
+### Qué hace
+
+`FavoritesPanelPage` (ruta `/favoritos`) lista las gasolineras favoritas del usuario con su precio de HOY para un combustible seleccionable (`ion-select`, mismo patrón que el filtro del mapa), resalta con una insignia verde "Más barata" / roja "Más cara" las que llevan `isCheapest`/`isMostExpensive`, y permite quitar cualquier favorito directamente desde la tarjeta. Se llega a ella desde un botón ⭐ nuevo en la cabecera global (visible solo con sesión activa, igual que el botón de cerrar sesión).
+
+### Diagrama de Flujo (Mermaid): navegación y estados de la pantalla
+
+```mermaid
+flowchart TD
+    A["Cabecera global (AppComponent)\n@if (authService.currentUser())"] --> B["Botón ⭐ 'Mis gasolineras favoritas'\nrouterLink='/favoritos'"]
+    B --> C["authGuard (igual que 'home'):\n¿hay sesión?"]
+    C -->|"no"| D["redirige a /login"]
+    C -->|"sí"| E["FavoritesPanelPage se muestra"]
+
+    E --> F["constructor: toObservable(selectedFuel).pipe(switchMap(fuel => favoritesService.getFavoritesWithPrices(fuel)...))"]
+    F --> G{"estado"}
+    G -->|"loading()"| H["ion-spinner"]
+    G -->|"errorMessage()"| I["ion-text color=danger con el mensaje"]
+    G -->|"favoritos().length === 0"| J["Mensaje vacío + pista ('vuelve al mapa y pulsa Guardar')"]
+    G -->|"favoritos con datos"| K["Lista de favorite-card, una por favorito"]
+
+    K --> L{"[ngClass] según flags"}
+    L -->|"isCheapest"| M["favorite-card--cheapest (verde) + insignia 'Más barata'"]
+    L -->|"isMostExpensive"| N["favorite-card--most-expensive (rojo) + insignia 'Más cara'"]
+    L -->|"ninguno / precio null"| O["tarjeta neutra / 'Precio no disponible'"]
+
+    E --> P["Usuario cambia el ion-select de combustible"]
+    P --> Q["selectedFuel.set(nuevoValor)"]
+    Q --> F
+
+    K --> R["Usuario pulsa 'Quitar' en una tarjeta"]
+    R --> S["onRemove(favorito): removingId.set(id), favoritesService.removeFavorite(id)"]
+    S -->|"éxito"| T["listener de getFavoritesWithPrices (Firestore) emite sin ese favorito — la tarjeta desaparece sola"]
+    S -->|"error"| U["errorMessage.set(mensaje); la tarjeta permanece"]
+    S --> V["finally: removingId.set(null)"]
+
+    E --> W["Botón 'Volver al mapa' (routerLink='/home')"]
+```
+
+### Justificación de Diseño (UI-DEV)
+
+1. **Ruta dedicada (`/favoritos`, lazy, protegida por `authGuard`), no un modal/`IonModal`.** El enunciado permitía ambas opciones ("navegue... o lo abra como un modal/menú lateral"); se eligió ruta porque encaja sin fricción en el patrón YA existente del proyecto (`login`/`register`/`home`, todas rutas `loadComponent` protegidas o no según el caso) — añadir un `IonModal` habría sido la primera vez que el proyecto usa overlays de Ionic, con su propio ciclo de vida (`ViewChild`, `present()`/`dismiss()`) a gestionar y limpiar, para un beneficio de UX marginal en una app con navegación simple de 4 pantallas.
+2. **`authGuard` en `/favoritos`, exactamente igual que en `home`.** `FavoritesPanelPage` depende de `FavoritesService`, que ya exige sesión en sus tres métodos (`[[06-favoritos]]`, auditoría [REVIEWER]) — sin `authGuard`, un usuario sin sesión podría llegar a ver la pantalla (aunque vacía/con error) antes de que el propio servicio se lo impida; con el guard, ni siquiera se instancia el componente. Verificado en un navegador real (Playwright): `GET /favoritos` sin sesión termina en `/login`, igual que `GET /home`.
+3. **`switchMap` sobre `toObservable(selectedFuel)`, no una suscripción manual dentro de un `effect()`.** Cambiar de combustible cambia el propio `Observable` de origen (`getFavoritesWithPrices` crea un `combineLatest` nuevo, con su propia petición HTTP y su propio listener de Firestore) — hace falta cancelar limpiamente la suscripción anterior antes de crear la siguiente, que es exactamente lo que hace `switchMap` y que un `effect()` con una suscripción manual no gestiona solo (habría que guardar y desuscribir la `Subscription` anterior a mano en cada ejecución).
+4. **`catchError` dentro del `Observable` interno (por combustible), no envolviendo todo el `pipe` externo.** Si el error escapara hasta afectar la suscripción de `toObservable(selectedFuel)`, RxJS terminaría con error TODA la cadena — y cambiar de combustible después de un fallo puntual ya no volvería a disparar ninguna consulta, porque el `switchMap` externo ya estaría "muerto". Con el `catchError` en el `Observable` interno, un fallo (ej. error de red de MITECO, o el hallazgo de `getFavorites()` ya corregido en la auditoría anterior) solo afecta a esa emisión concreta: se muestra el mensaje de error y la próxima vez que el usuario cambie de combustible se vuelve a intentar con normalidad.
+5. **Coste aceptado y documentado, no silenciado: cambiar de combustible en esta pantalla SÍ dispara una nueva petición HTTP a MITECO.** La sección "Seguridad y Costes" de la parte [ARQUITECTO] de este mismo documento ya advertía de este coste y recomendaba, si se confirmaba la necesidad, cachear `GasStation[]` en el cliente y exponer una variante de `mergeWithPrices` que reciba las estaciones ya descargadas. Se ha optado, en este ciclo, por NO implementar esa optimización todavía: es una API pública y gratuita sin cuota (mismo criterio de coste cero que el resto del proyecto), el volumen de cambios de combustible por sesión de uso es bajo (una app familiar, no un panel de trading), y añadir una capa de caché aquí habría acoplado esta página a los detalles internos de `FavoritesService` (`mergeWithPrices` es privado, hoy). Queda anotado explícitamente como optimización futura, no como una regresión pasada por alto.
+6. **`[ngClass]` (pedido explícitamente) + insignia con icono Y texto, nunca solo color.** `ion-icon name="medal-outline"` con el texto "Más barata de tus favoritas" (y `trending-up-outline` / "Más cara de tus favoritas" para el otro extremo) — el color por sí solo no es una señal accesible para usuarios con dificultad para distinguir colores (mismo criterio ya aplicado al icono de "tu ubicación" en el mapa, `[[02-mapa-base]]`/`map.component.ts`). El verde/rojo de texto (`#166534`/`#991b1b` en claro, `#86efac`/`#fca5a5` en oscuro) se eligió específicamente para contraste de TEXTO sobre el fondo de la tarjeta, no reutilizando `--ion-color-success`/`--ion-color-danger` de Ionic tal cual (esos tonos por defecto están pensados para fondos de botón con texto blanco encima, no para texto de color sobre un fondo claro) — mismo criterio de verificación de contraste ya aplicado en `variables.scss` al naranja de marca.
+7. **El resto de la tarjeta (`favorite-card`) usa variables de tema de Ionic (`--ion-color-step-50`, `--ion-color-medium`), no colores fijos.** A diferencia del popup del mapa (HTML plano fuera del árbol de Angular, que necesita sus propios overrides de `prefers-color-scheme` en `global.scss`), esta tarjeta SÍ es una plantilla de Angular normal: `dark.system.css` (ya importado globalmente) adapta esas variables solo, sin duplicar reglas de modo oscuro salvo para el par verde/rojo específico del punto 6.
+8. **Botón "Quitar" por tarjeta, no solo lectura.** No estaba pedido explícitamente en el encargo, pero sin él esta pantalla habría sido un callejón sin salida: para quitar un favorito el usuario habría tenido que volver al mapa, encontrar el marcador de esa gasolinera concreta entre las visibles y reabrir su popup. Reutiliza `FavoritesService.removeFavorite` ya auditado; tras el éxito no se actualiza `favoritos` a mano — el propio listener en vivo de `getFavoritesWithPrices` (que atraviesa hasta `getFavorites()`) recibe la baja de Firestore y hace desaparecer la tarjeta solo, mismo patrón de "única fuente de verdad" ya usado y justificado para el botón del popup del mapa.
+9. **`removingId` (un solo id, no un `Set` ni un signal por tarjeta) para deshabilitar el botón "Quitar" en curso.** Con un máximo de 10 favoritos y una operación de borrado que tarda milisegundos, no hace falta soportar N borrados concurrentes; un único id en curso es suficiente y más simple, y `onRemove` corta pronto (`if (this.removingId()) return`) si ya hay uno en marcha.
+10. **Botón "Volver al mapa" dentro del propio contenido (`ion-button routerLink`), no un `ion-header` de página con `ion-back-button`.** El proyecto no usa cabeceras por-página (`login`/`home` solo tienen `ion-content`; la única cabecera es la global de `AppComponent`) — introducir un patrón de cabecera nuevo solo para esta pantalla habría roto esa consistencia. Un botón de vuelta dentro del contenido, con icono + texto, seguía siendo claro sin añadir un segundo tipo de cabecera al proyecto.
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+- **Verificado en navegador real (Playwright + Chromium headless, `ng serve`), flujo sin sesión** (mismo límite que ciclos anteriores: sin credenciales de una cuenta de Firebase real en este entorno):
+  1. `GET /` sin sesión → termina en `/login` (sin regresión sobre el flujo ya verificado en `[[05-autenticacion]]`).
+  2. `GET /favoritos` sin sesión (URL directa, no clic en la app) → también termina en `/login` — confirma que `authGuard` protege la ruta nueva igual que `home`.
+  3. El botón ⭐ "Mis gasolineras favoritas" no aparece en la cabecera sin sesión (0 encontrados) — confirma que el `@if (authService.currentUser())` ya existente sigue envolviendo correctamente el botón nuevo.
+  4. Cero errores de consola durante la navegación.
+- **Pendiente explícito para `[REVIEWER]`, no verificado en este ciclo por no disponer de una cuenta de prueba:** con sesión real, confirmar que (a) la lista de favoritos y sus precios se muestran correctamente, (b) las insignias verde/rojo aparecen en la gasolinera correcta al cambiar de combustible, (c) "Quitar" hace desaparecer la tarjeta sola tras la confirmación de Firestore, y (d) el aspecto en modo oscuro del sistema es legible (contraste de las insignias, en particular).
+
+---
+
+## Auditoría [REVIEWER]: panel de favoritos
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/pages/favorites-panel/favorites-panel.page.ts` / `.html`
+- `src/app/core/services/favorites.service.ts` (`getFavoritesWithPrices`, `mergeWithPrices`, `markExtremes`)
+- `src/app/core/services/miteco.service.ts` (`getEstaciones`, para confirmar si cachea o no)
+- `node_modules/rxfire/firestore/index.cjs.js` (implementación real de `collectionData`, para verificar su comportamiento con 0 documentos — no solo su documentación)
+
+Metodología: lectura de código + trazado manual de las dos preguntas encargadas (incluyendo la implementación real de `collectionData`/`onSnapshot` de `rxfire`, no solo su documentación), apoyado en `npx tsc --noEmit`, `npm run lint` y `ng build`. **No se ha creado una cuenta de Firebase real ni se ha renderizado el componente en un navegador en este ciclo** — se consideró y se descartó explícitamente (ver punto 2, hallazgo de honestidad); las conclusiones de esta auditoría son evidencia de código, no una confirmación empírica en ejecución real. Ambos límites quedan documentados como pendientes explícitos, no ocultados.
+
+### 1. ¿El cruce de datos entre Firestore y MITECO es eficiente? ¿Se llama a MITECO por cada favorito?
+
+- [x] **Confirmado: NO se llama a la API de MITECO una vez por favorito.** `MitecoService.getEstaciones()` (`miteco.service.ts:79`) hace una única petición HTTP (`this.http.get<MitecoRespuesta>(MITECO_API_URL)`) que devuelve TODAS las estaciones de España en una sola respuesta — no hay ningún bucle que pida una estación por id. `FavoritesService.getFavoritesWithPrices` (`favorites.service.ts:122`) llama a `getEstaciones()` **una sola vez por suscripción**, sin importar si el usuario tiene 1 o 10 favoritos.
+- [x] **El cruce en sí (una vez descargados ambos lados) es O(favoritos + estaciones), no O(favoritos × estaciones).** `mergeWithPrices` (`favorites.service.ts:134-151`) construye `preciosPorId = new Map(estaciones.map(...))` UNA vez (O(~11.500)) y despues resuelve cada favorito con `preciosPorId.get(favorito.id)` (O(1) cada uno) — nunca un `.find()` anidado. Con 10 favoritos como máximo, el coste real de esta parte es insignificante frente a la propia descarga HTTP.
+- [ ] ⚠️ **HALLAZGO (CONFIRMADO, no bloqueante): sí se repite la descarga COMPLETA de MITECO por cada CAMBIO DE COMBUSTIBLE en el panel, no por cada favorito.** `MitecoService.getEstaciones()` no cachea entre llamadas (confirmado leyendo `miteco.service.ts` completo: no hay ningún campo de caché, cada invocación es un `HttpClient.get` nuevo) y `FavoritesPanelPage` resuscribe a `getFavoritesWithPrices(fuel)` cada vez que `selectedFuel` cambia (`favorites-panel.page.ts:87-114`, vía `switchMap`). Resultado: cambiar el `ion-select` de "Gasolina 95" a "Diésel" descarga OTRA VEZ las ~11.500 estaciones completas, aunque solo cambie qué campo de precio se lee de cada una.
+  - **Esto es exactamente el escenario que ya advertía la sección "Seguridad y Costes" de la parte [ARQUITECTO] de este documento** (líneas ~312) y que [UI-DEV] reconoció explícitamente sin implementarlo (punto 5 de su Justificación de Diseño) — no es un hallazgo nuevo, es la confirmación con evidencia de código de un riesgo ya documentado y conscientemente aceptado.
+  - **Impacto real: bajo, no de coste monetario.** MITECO es una API pública sin cuota ni facturación (mismo criterio de coste cero que el resto del proyecto) — esto es una cuestión de eficiencia de red/latencia percibida por el usuario (una respuesta de varios cientos de KB por cada cambio de combustible), no una violación de la sección 1 de `CLAUDE.md` (que habla explícitamente de límites de lecturas/escrituras de **Firebase**, no de APIs públicas externas). No hay ninguna llamada a Firestore adicional en este flujo: `getFavorites()` (el listener de Firestore) NO se reinicia en cada cambio de combustible porque `combineLatest` (dentro de `getFavoritesWithPrices`) solo se reconstruye por completo al crear un `Observable` nuevo — y aquí sí se crea uno nuevo por cada `switchMap`, así que en rigor SÍ se reabre un nuevo listener de Firestore por cada cambio de combustible también (hasta 10 lecturas cada vez, dentro del límite ya existente, pero no las 0 lecturas incrementales que tendría si se reutilizara el mismo listener).
+  - **Respuesta directa a "¿deberíamos usar la lista cacheada si es posible?": sí es posible, y no se ha hecho todavía.** `MapComponent` ya resuelve exactamente este mismo problema para sí mismo con `estacionesCache` (`map.component.ts`) — cachea la respuesta de `getEstaciones()` en memoria y solo repite el filtro/recorte en cada cambio de combustible, sin una segunda petición HTTP. `FavoritesPanelPage` no reutiliza esa cache (vive en una instancia de componente distinta, y `estacionesCache` es un campo privado de `MapComponent`, no accesible desde aquí) ni existe ninguna caché a nivel de `MitecoService` que ambos consumidores puedan compartir.
+  - **No corregido en esta auditoría, a propósito.** Corregirlo bien (compartir una caché entre `MapComponent` y `FavoritesPanelPage`) requiere una decisión de arquitectura — ¿vive la caché en `MitecoService` con una invalidación por tiempo?, ¿se expone una variante de `mergeWithPrices` que reciba `GasStation[]` ya descargado, como ya proponía la sección [ARQUITECTO]? — que excede el mandato de esta auditoría (confirmar y documentar, no rediseñar servicios). Se mantiene como recomendación explícita para un ciclo futuro de `[[ARQUITECTO]]`, no como bloqueante de este commit.
+
+**Veredicto punto 1: el cruce de datos en sí es eficiente y correcto — confirmado que NO hay ninguna llamada a MITECO por favorito individual, y que la búsqueda por `id` es O(1) vía `Map`.** Existe una ineficiencia real pero ya conocida y de bajo impacto (sin coste monetario, API pública sin cuota): cada cambio de combustible en el panel repite la descarga completa de MITECO por no compartir la caché que `MapComponent` ya tiene para sí mismo. No bloqueante; recomendado como trabajo futuro de `[[ARQUITECTO]]`.
+
+### 2. ¿La interfaz reacciona bien si el usuario no tiene ningún favorito guardado?
+
+- [x] **El `@else if (favoritos().length === 0)` existe y es alcanzable** (`favorites-panel.page.html:33-39`): mensaje claro ("Aún no has guardado ninguna gasolinera favorita") más una pista accionable ("Vuelve al mapa y pulsa..."), no una pantalla en blanco ni un error.
+- [x] **Verificado que Firestore SÍ emite una lista vacía (no "nada") cuando la subcolección no tiene documentos — no es una suposición, se confirmó leyendo la implementación real de `collectionData`.** `collectionData()` (`rxfire/firestore/index.cjs.js`) es `collection(query).pipe(map(arr => arr.map(snapToData)))`, y `collection()` es `fromRef(query, {...}).pipe(map(changes => changes.docs))`. `fromRef` envuelve el `onSnapshot` nativo de Firestore, que **dispara su callback en la primera suscripción incluso con 0 documentos coincidentes** (`QuerySnapshot.docs` es siempre un array, vacío si no hay resultados) — no es un caso especial sin manejar, es el comportamiento normal de la librería. Con 0 favoritos: `getFavorites()` emite `[]`, `mergeWithPrices([], estaciones, fuel)` devuelve `[]` (`favoritos.map(...)` sobre un array vacío es `[]`, sin excepción), y la plantilla renderiza correctamente el estado vacío.
+- [ ] ⚠️ **No verificado en navegador en este ciclo, por honestidad explícita.** Se consideró interceptar la respuesta de Firestore con Playwright para renderizar el estado vacío sin una cuenta real, pero el SDK de Firestore no usa peticiones HTTP REST simples e interceptables de forma fiable (long-polling/WebChannel), y montar un test de componente aislado (`TestBed` con `FavoritesService` mockeado) habría requerido antes revisar/arreglar la configuración de test del proyecto (`ng test`, sin `TestBed.configureTestingModule` explícito siquiera en el spec ya existente de `HomePage`), que es trabajo fuera del alcance de esta auditoría. La conclusión de este punto se apoya **solo** en el trazado de código de la línea anterior (comportamiento real y documentado de `collectionData`/`onSnapshot` con 0 documentos, más lectura directa de `mergeWithPrices`/la plantilla) — evidencia válida, pero no una confirmación empírica en ejecución real. Queda como pendiente explícito (ver sección final).
+- [ ] ⚠️ **HALLAZGO menor (CONFIRMADO, no bloqueante), conectado con el punto 1: un usuario con 0 favoritos ve igualmente el `ion-spinner` de carga hasta que termina de descargarse la lista COMPLETA de MITECO (~11.500 estaciones), antes de que se muestre el estado vacío.** Esto es consecuencia directa de que `getFavoritesWithPrices` usa `combineLatest`, que no emite NADA hasta que AMBAS fuentes (`getFavorites()` Y `getEstaciones()`) han emitido al menos una vez — aunque `getFavorites()` para un usuario sin favoritos responda casi instantáneamente (una subcolección vacía es una lectura barata), el `combineLatest` sigue esperando a que la descarga de MITECO termine antes de dejar pasar el `[]` combinado. Un usuario sin favoritos no necesita esperar a esa descarga para saber que no tiene nada guardado. No bloqueante (mismo motivo que el hallazgo del punto 1: sin coste monetario, solo latencia percibida), pero vale la pena señalarlo junto al hallazgo 1 porque comparten la misma causa raíz.
+- [x] **`markExtremes([])` y `mergeWithPrices([], ...)` no lanzan ninguna excepción con un array vacío** (revisado el código: `precios.length < 2` corta inmediatamente cuando `precios` es `[]`) — el estado vacío no depende de un caso especial frágil en la lógica de negocio, es simplemente el resultado natural de mapear un array vacío.
+
+**Veredicto punto 2: la interfaz reacciona correctamente al estado vacío — mensaje claro, accesible y accionable.** La conclusión se apoya en trazado de código (comportamiento real y verificado de `collectionData`/`onSnapshot` con 0 documentos, más lectura de `mergeWithPrices` y la plantilla), **no en una confirmación empírica en navegador** — pendiente explícito, documentado con honestidad en vez de darlo por bueno sin comprobarlo. Se detectó además un hallazgo menor no bloqueante, con la misma causa raíz que el hallazgo del punto 1 (`combineLatest` espera siempre a MITECO): el estado vacío tarda más de lo estrictamente necesario en aparecer porque depende de una descarga que, para un usuario sin favoritos, es irrelevante.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: pasan sin errores (reconfirmado en esta auditoría).
+- [x] **Sin fugas de memoria nuevas:** la suscripción del constructor de `FavoritesPanelPage` usa `takeUntilDestroyed(this.destroyRef)` (`favorites-panel.page.ts:109`); `switchMap` cancela la suscripción interna anterior en cada cambio de combustible, así que no quedan listeners de Firestore huérfanos acumulándose.
+- [x] **Sin escritura de datos sensibles ni secretos nuevos.**
+- [x] **Ruta `/favoritos` protegida por `authGuard`**, reconfirmado por lectura de `app.routes.ts`.
+
+### Pendiente explícito (no bloqueante para este commit)
+
+- **Compartir una caché de `GasStation[]` entre `MapComponent` y `FavoritesPanelPage`** (o dentro de `MitecoService`) para evitar la descarga repetida de MITECO en cada cambio de combustible del panel — hallazgo 1, recomendado para un ciclo futuro de `[[ARQUITECTO]]`.
+- **Mostrar el estado vacío sin esperar a la descarga de MITECO** cuando `getFavorites()` ya ha confirmado 0 favoritos — hallazgo menor del punto 2, misma causa raíz que el anterior.
+- **Verificación end-to-end con una cuenta de Firebase real** (sesión con favoritos reales Y el propio estado vacío con 0 favoritos, cambio de combustible, insignias verde/rojo, modo oscuro) — pendiente heredado, no resuelto en este ciclo. Incluye validar en ejecución real la conclusión del punto 2 de esta auditoría, hoy apoyada solo en lectura de código.
+- **Configuración de test del proyecto (`ng test`)**: revisar por qué el spec ya existente (`home.page.spec.ts`) no llama a `TestBed.configureTestingModule(...)` antes de `TestBed.createComponent`, y si `ng test` corre realmente en este repositorio — necesario antes de poder añadir tests de componente fiables (ej. un test aislado del estado vacío de `FavoritesPanelPage` con `FavoritesService` mockeado, sin depender de una cuenta de Firebase real).
+- **Firestore Security Rules** — pendiente heredado desde `[[05-autenticacion]]`, no agravado por esta feature.
+
+### Veredicto final
+
+**Aprobado para commit.** Las dos preguntas encargadas quedan respondidas con evidencia de código (incluida la implementación real de `collectionData`/`onSnapshot`, no solo su documentación), no lectura superficial: (1) el cruce de datos NO llama a MITECO por favorito individual (una sola petición HTTP por suscripción, cruce O(1) por `Map`) — existe una ineficiencia real pero de bajo impacto (repetir la descarga completa por cada cambio de combustible, sin caché compartida con el mapa), ya conocida y documentada, no introducida sin avisar; (2) el estado vacío está implementado correctamente según el trazado de código, con un hallazgo menor conectado al punto 1 (el spinner tarda más de lo necesario en un caso sin favoritos). **Ninguno de los dos hallazgos es bloqueante:** no hay coste monetario ni de Firebase involucrado, ambos quedan documentados como trabajo futuro explícito. Se deja constancia honesta de que esta auditoría, a diferencia de la de `[[05-autenticacion]]`, no incluye ninguna verificación en navegador ni con cuenta real — la conclusión del punto 2 es evidencia de código, no una comprobación empírica; queda como pendiente explícito, no como algo dado por hecho.

@@ -1,0 +1,99 @@
+<ion-content class="favorites-panel" [fullscreen]="true">
+  <div class="favorites-panel__wrapper">
+    <ion-button class="favorites-panel__back" fill="clear" routerLink="/home" aria-label="Volver al mapa">
+      <ion-icon slot="start" name="arrow-back-outline"></ion-icon>
+      Volver al mapa
+    </ion-button>
+
+    <h1 class="favorites-panel__title">Mis gasolineras favoritas</h1>
+
+    <ion-select
+      class="favorites-panel__fuel-filter"
+      fill="outline"
+      interface="popover"
+      label="Combustible"
+      labelPlacement="floating"
+      [value]="selectedFuel()"
+      (ionChange)="onFuelChange($event)"
+      aria-label="Comparar precios por tipo de combustible"
+    >
+      <ion-select-option value="gasolina95">{{ fuelLabels.gasolina95 }}</ion-select-option>
+      <ion-select-option value="gasolina98">{{ fuelLabels.gasolina98 }}</ion-select-option>
+      <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
+    </ion-select>
+
+    @if (loading()) {
+      <div class="favorites-panel__state">
+        <ion-spinner name="crescent" aria-label="Cargando favoritos..."></ion-spinner>
+      </div>
+    } @else if (errorMessage()) {
+      <ion-text color="danger" class="favorites-panel__state" role="alert">
+        <p>{{ errorMessage() }}</p>
+      </ion-text>
+    } @else if (favoritos().length === 0) {
+      <div class="favorites-panel__state">
+        <p>Aún no has guardado ninguna gasolinera favorita.</p>
+        <p class="favorites-panel__state-hint">
+          Vuelve al mapa y pulsa "⭐ Guardar" en el popup de cualquier gasolinera.
+        </p>
+      </div>
+    } @else {
+      <ul class="favorites-panel__list">
+        @for (favorito of favoritos(); track favorito.id) {
+          <li
+            class="favorite-card"
+            [ngClass]="{
+              'favorite-card--cheapest': favorito.isCheapest,
+              'favorite-card--most-expensive': favorito.isMostExpensive,
+            }"
+          >
+            @if (favorito.isCheapest) {
+              <p class="favorite-card__badge favorite-card__badge--cheapest">
+                <ion-icon name="medal-outline" aria-hidden="true"></ion-icon>
+                Más barata de tus favoritas
+              </p>
+            }
+            @if (favorito.isMostExpensive) {
+              <p class="favorite-card__badge favorite-card__badge--most-expensive">
+                <ion-icon name="trending-up-outline" aria-hidden="true"></ion-icon>
+                Más cara de tus favoritas
+              </p>
+            }
+
+            <div class="favorite-card__body">
+              <div class="favorite-card__info">
+                <strong class="favorite-card__marca">{{ favorito.marca }} — {{ favorito.municipio }}</strong>
+                <span class="favorite-card__direccion">{{ favorito.direccion }}</span>
+              </div>
+
+              <div class="favorite-card__precio">
+                @if (favorito.precio !== null) {
+                  {{ favorito.precio.toFixed(3) }} €
+                } @else {
+                  <span class="favorite-card__precio--indisponible">Precio no disponible</span>
+                }
+              </div>
+            </div>
+
+            <ion-button
+              class="favorite-card__remove"
+              fill="clear"
+              color="medium"
+              size="small"
+              [disabled]="removingId() === favorito.id"
+              (click)="onRemove(favorito)"
+              [attr.aria-label]="'Quitar ' + favorito.marca + ' de favoritos'"
+            >
+              @if (removingId() === favorito.id) {
+                <ion-spinner name="crescent" aria-label="Quitando..."></ion-spinner>
+              } @else {
+                <ion-icon slot="start" name="trash-outline"></ion-icon>
+                Quitar
+              }
+            </ion-button>
+          </li>
+        }
+      </ul>
+    }
+  </div>
+</ion-content>
