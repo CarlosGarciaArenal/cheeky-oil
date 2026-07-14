@@ -35,6 +35,26 @@
   margin-bottom: 4px;
 }
 
+/*
+ * Espacio SIEMPRE reservado (min-height), no un elemento que aparece/desaparece
+ * del flujo. Antes se usaba el `errorText` nativo de `ion-input` (un nodo que
+ * Ionic solo dibuja con altura cuando el campo está `ion-touched.ion-invalid`,
+ * dentro de su shadow DOM): al pasar de "sin mensaje" a "con mensaje" cambiaba
+ * la altura total de `.login__wrapper`, que se centra con
+ * `justify-content: center` — Angular/Ionic recalculaba el centrado con cada
+ * cambio de altura y el formulario "saltaba" hacia arriba al tocar un campo
+ * y dejarlo vacío. Con un párrafo propio (fuera del shadow DOM de Ionic, así
+ * que sí se puede fijar su altura desde aquí) que SIEMPRE ocupa esta altura,
+ * solo cambiado el texto por dentro, `.login__wrapper` nunca cambia de
+ * tamaño total y el centrado no se recalcula.
+ */
+.login__field-error {
+  min-height: 1.2em;
+  margin: 4px 4px 8px;
+  font-size: 0.75rem;
+  color: var(--ion-color-danger);
+}
+
 .login__error {
   display: block;
   margin: 8px 4px 4px;

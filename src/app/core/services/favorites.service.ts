@@ -1,4 +1,4 @@
-import { Injectable, inject } from '@angular/core';
+import { EnvironmentInjector, Injectable, inject, runInInjectionContext } from '@angular/core';
 import {
   Firestore,
   collection,
@@ -27,6 +27,12 @@ export class FavoritesService {
   private readonly authService = inject(AuthService);
   private readonly firestore = inject(Firestore);
   private readonly mitecoService = inject(MitecoService);
+  /**
+   * Capturado aquí (en el constructor del servicio, que SIEMPRE corre en
+   * contexto de inyección) para poder restaurarlo más tarde dentro de
+   * `getFavorites()` — ver justificación completa ahí.
+   */
+  private readonly environmentInjector = inject(EnvironmentInjector);
 
   private favoritesCollectionPath(uid: string): string {
     return `users/${uid}/favorites`;
@@ -94,6 +100,26 @@ export class FavoritesService {
    * [REVIEWER], ver `docs/features/06-favoritos.md`). `throwError(...)`
    * devuelve en su lugar un `Observable` que emite el error de forma normal
    * en `subscribe({ error: ... })`, igual que cualquier otro fallo de red.
+   *
+   * `collectionData(...)` se ejecuta dentro de `runInInjectionContext(...)`
+   * (hallazgo de una auditoría [REVIEWER] posterior, ver `docs/features/06-favoritos.md`):
+   * `collectionData` (de `rxfire`, re-exportado por `@angular/fire`) necesita
+   * un contexto de inyección real para resolver sus "schedulers" internos
+   * (`ɵAngularFireSchedulers`/`PendingTasks`/`EnvironmentInjector`), que son
+   * los que reenganchan las emisiones del listener de Firestore a la zona de
+   * Angular (`observeOn(schedulers.insideAngular)`). Este método se invoca
+   * desde sitios que NO garantizan ese contexto por sí solos — directamente
+   * en `ngAfterViewInit()` de `MapComponent`, y dentro de un `switchMap()` en
+   * `FavoritesPanelPage` — y sin él, `@angular/fire` cae a un *fallback*
+   * silencioso (solo un `console.warn`, no una excepción) que sigue
+   * funcionando pero SIN esa reconexión a la zona: las emisiones posteriores
+   * del listener de Firestore pueden no disparar detección de cambios,
+   * dejando la UI que depende de esos datos desactualizada hasta que algún
+   * otro evento fuerce un ciclo de Angular. `environmentInjector` se capturó
+   * en el constructor de este servicio (que sí corre en contexto de
+   * inyección) precisamente para poder restaurarlo aquí, en el único sitio
+   * que lo necesita — así ningún consumidor de `getFavorites()` tiene que
+   * preocuparse de en qué contexto se le ocurre llamarlo.
    */
   getFavorites(): Observable<Favorite[]> {
     const uid = this.authService.getCurrentUser()?.uid;
@@ -102,7 +128,10 @@ export class FavoritesService {
     }
 
     const favoritesRef = collection(this.firestore, this.favoritesCollectionPath(uid));
-    return collectionData(favoritesRef) as Observable<Favorite[]>;
+    return runInInjectionContext(
+      this.environmentInjector,
+      () => collectionData(favoritesRef) as Observable<Favorite[]>,
+    );
   }
 
   /**
@@ -118,6 +147,16 @@ export class FavoritesService {
    * cada vez que `getFavorites()` emite (ej. el usuario añade/quita un
    * favorito) — solo se repite el cruce en memoria, sin una segunda descarga
    * de las ~11.500 estaciones de MITECO.
+   *
+   * Nota (auditoría [REVIEWER] posterior, ver `docs/features/06-favoritos.md`):
+   * `FavoritesPanelPage` NO usa este método directamente — llama a
+   * `getFavorites()` una vez y a `mergeWithPrices()` (público, más abajo) por
+   * separado, para poder mostrar la lista (Firestore, rápida) sin esperar al
+   * cruce con MITECO (lento) Y compartir la MISMA suscripción de Firestore
+   * entre ambos usos (`shareReplay`), en vez de abrir un segundo listener
+   * como haría llamar a este método por su cuenta. Este método sigue siendo
+   * válido y correcto para cualquier consumidor futuro que solo necesite
+   * "favoritos con precio" en una sola llamada, sin ese requisito extra.
    */
   getFavoritesWithPrices(combustibleType: FuelType): Observable<FavoriteWithPrice[]> {
     return combineLatest([this.getFavorites(), this.mitecoService.getEstaciones()]).pipe(
@@ -130,8 +169,15 @@ export class FavoritesService {
    * `GasStation`, ver `[[06-favoritos]]`): un `Map` de `estaciones` da una
    * búsqueda O(1) por favorito, en vez de un `.find()` por cada uno (que
    * sería O(favoritos × estaciones) — con hasta 11.500 estaciones, notable).
+   *
+   * Público (no `private`) para que un consumidor que YA tiene su propia
+   * copia de `favoritos` (ej. `FavoritesPanelPage`, que la obtiene de una
+   * suscripción a `getFavorites()` que comparte con otro fin) pueda cruzarla
+   * con MITECO sin tener que volver a abrir un segundo listener de Firestore
+   * llamando a `getFavoritesWithPrices()` por su cuenta — pura función,
+   * sin estado ni acceso a Firestore/MITECO por sí misma.
    */
-  private mergeWithPrices(
+  mergeWithPrices(
     favoritos: Favorite[],
     estaciones: GasStation[],
     combustibleType: FuelType,

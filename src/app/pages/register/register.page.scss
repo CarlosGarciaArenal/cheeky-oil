@@ -35,6 +35,14 @@
   margin-bottom: 4px;
 }
 
+/* Mismo motivo que `.login__field-error` (`login.page.scss`): altura SIEMPRE reservada para que `.register__wrapper` (centrado con `justify-content: center`) no cambie de tamaño al aparecer/desaparecer un error, y el formulario no "salte". */
+.register__field-error {
+  min-height: 1.2em;
+  margin: 4px 4px 8px;
+  font-size: 0.75rem;
+  color: var(--ion-color-danger);
+}
+
 .register__error {
   display: block;
   margin: 8px 4px 4px;

@@ -14,11 +14,15 @@
             formControlName="email"
             autocomplete="email"
             inputmode="email"
-            [errorText]="'Introduce un email válido.'"
             [class.ion-invalid]="form.controls.email.touched && form.controls.email.invalid"
             [class.ion-touched]="form.controls.email.touched"
+            [attr.aria-describedby]="form.controls.email.touched && form.controls.email.invalid ? 'login-email-error' : null"
           ></ion-input>
         </ion-item>
+        <p class="login__field-error" id="login-email-error" role="alert">
+          {{ form.controls.email.touched && form.controls.email.invalid ? 'Introduce un email válido.' : '' }}
+        </p>
+
         <ion-item>
           <ion-input
             label="Contraseña"
@@ -26,11 +30,14 @@
             type="password"
             formControlName="password"
             autocomplete="current-password"
-            [errorText]="'La contraseña es obligatoria.'"
             [class.ion-invalid]="form.controls.password.touched && form.controls.password.invalid"
             [class.ion-touched]="form.controls.password.touched"
+            [attr.aria-describedby]="form.controls.password.touched && form.controls.password.invalid ? 'login-password-error' : null"
           ></ion-input>
         </ion-item>
+        <p class="login__field-error" id="login-password-error" role="alert">
+          {{ form.controls.password.touched && form.controls.password.invalid ? 'La contraseña es obligatoria.' : '' }}
+        </p>
       </ion-list>
 
       @if (errorMessage()) {
@@ -47,7 +54,7 @@
         }
       </ion-button>
 
-      <a class="login__register-link" routerLink="/register">¿No tienes cuenta de familia? Regístrate</a>
+      <a class="login__register-link" routerLink="/register">¿No tienes cuenta? Regístrate</a>
     </form>
   </div>
 </ion-content>

@@ -78,7 +78,7 @@ export class RegisterPage {
   private handleError(error: unknown): void {
     if (error instanceof Error && error.message === INVALID_FAMILY_CODE_MESSAGE) {
       this.invalidFamilyCode.set(true);
-      this.errorMessage.set('Código familiar incorrecto. Consulta el código con tu familia.');
+      this.errorMessage.set('Código secreto incorrecto. Consulta el código con quien te lo compartió.');
       return;
     }
 

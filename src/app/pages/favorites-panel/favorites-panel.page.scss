@@ -1,7 +1,18 @@
+/*
+ * `padding-top` calculado, no dejado a la auto-detección de `ion-content`
+ * (que aquí no puede funcionar sola — ver comentario completo en
+ * `favorites-panel.page.html`): la cabecera global vive fuera del árbol de
+ * esta página, y `ion-router-outlet` ocupa todo el viewport por detrás de
+ * ella. Mismo criterio y misma fórmula ya usados en
+ * `map.component.scss` (`.map__fuel-filter`): altura de un `ion-toolbar`
+ * (44px iOS / 56px MD, se usa el mayor) + el "notch"/isla dinámica
+ * (`env(safe-area-inset-top)`) + un margen. Sin esto, el botón "Volver al
+ * mapa" (lo primero del contenido) queda oculto detrás de la cabecera.
+ */
 .favorites-panel__wrapper {
   max-width: 640px;
   margin: 0 auto;
-  padding: 8px 16px 32px;
+  padding: calc(env(safe-area-inset-top, 0px) + 56px + 12px) 16px 32px;
 }
 
 .favorites-panel__back {
@@ -41,11 +52,19 @@
 }
 
 /*
- * Fondo/borde con las variables de tema de Ionic (`--ion-color-step-50`,
- * `--ion-text-color`), no colores fijos: `dark.system.css` (ya importado en
- * `global.scss`) las adapta solas a modo oscuro sin duplicar reglas aquí —
- * a diferencia del popup del mapa (`global.scss`), esta tarjeta SÍ vive
- * dentro del árbol de Angular y recibe la cascada normal de estilos.
+ * Naranja claro + texto oscuro, MISMA pareja ya usada y verificada en el
+ * popup de gasolinera del mapa (`global.scss`, `.gas-station-popup`), no las
+ * variables de paso genéricas de Ionic (`--ion-color-step-50`/`--ion-text-color`)
+ * que se usaban antes: con ellas, en la práctica la tarjeta y el texto
+ * salían casi blanco sobre blanco (hallazgo reportado por el usuario) —
+ * fuera un problema de la variable en sí o de cómo se resolvía en este
+ * contexto concreto, un color fijo y ya verificado es más fiable que
+ * depender de una variable de tema de proposito general para ESTE contraste
+ * concreto (texto/precio legibles). Contraste comprobado con la fórmula de
+ * contraste W3C para cada par texto/fondo usado aquí (todos ≥ 4.5:1, AA):
+ * `#7a2e0e` sobre `#fff4ec` → 8.72:1; `#c2410c` sobre `#fff4ec` → 4.79:1;
+ * `#9a5a34` sobre `#fff4ec` → 5.0:1; y sus equivalentes en modo oscuro más
+ * abajo.
  */
 .favorite-card {
   position: relative;
@@ -54,8 +73,9 @@
   gap: 8px;
   padding: 14px 16px;
   border-radius: 12px;
-  background: var(--ion-color-step-50, #f4f4f4);
-  border: 1px solid var(--ion-color-step-100, #e0e0e0);
+  background: #fff4ec;
+  border: 1px solid #f3d5be;
+  color: #7a2e0e;
 }
 
 .favorite-card__badge {
@@ -113,11 +133,12 @@
 
 .favorite-card__marca {
   font-size: 1rem;
+  color: #c2410c;
 }
 
 .favorite-card__direccion {
   font-size: 0.85rem;
-  color: var(--ion-color-medium);
+  color: #9a5a34;
 }
 
 .favorite-card__precio {
@@ -125,12 +146,19 @@
   font-size: 1.125rem;
   font-weight: 700;
   white-space: nowrap;
+  color: #7a2e0e;
 }
 
-.favorite-card__precio--indisponible {
+.favorite-card__precio--indisponible,
+.favorite-card__precio--cargando {
   font-size: 0.85rem;
   font-weight: 400;
-  color: var(--ion-color-medium);
+  color: #9a5a34;
+}
+
+.favorite-card__precio--cargando ion-spinner {
+  width: 1rem;
+  height: 1rem;
 }
 
 .favorite-card__remove {
@@ -139,6 +167,30 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  /* Mismos pares oscuros que `.gas-station-popup` en `global.scss`. Contraste verificado: `#ffd9b8` sobre `#2b1c12` → 12.42:1; `#ff8a5b` sobre `#2b1c12` → 7.07:1; `#c99368` sobre `#2b1c12` → 6.14:1. */
+  .favorite-card {
+    background: #2b1c12;
+    border-color: #4a3220;
+    color: #ffd9b8;
+  }
+
+  .favorite-card__marca {
+    color: #ff8a5b;
+  }
+
+  .favorite-card__direccion {
+    color: #c99368;
+  }
+
+  .favorite-card__precio {
+    color: #ffd9b8;
+  }
+
+  .favorite-card__precio--indisponible,
+  .favorite-card__precio--cargando {
+    color: #c99368;
+  }
+
   .favorite-card__badge--cheapest {
     color: #86efac;
   }

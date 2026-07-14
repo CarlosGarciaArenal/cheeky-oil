@@ -1,8 +1,8 @@
 <ion-content class="register" [fullscreen]="true" [scrollY]="false">
   <div class="register__wrapper">
     <img class="register__logo" src="assets/logo.svg" alt="Logotipo de Cheeky Oil" width="72" height="72" />
-    <h1 class="register__title">Crea tu cuenta familiar</h1>
-    <p class="register__subtitle">Necesitas el Código Familiar para unirte</p>
+    <h1 class="register__title">Crea tu cuenta</h1>
+    <p class="register__subtitle">Necesitas el Código Secreto para unirte</p>
 
     <form class="register__form" [formGroup]="form" (ngSubmit)="onSubmit()" novalidate>
       <ion-list class="register__list" lines="full">
@@ -14,11 +14,21 @@
             formControlName="email"
             autocomplete="email"
             inputmode="email"
-            [errorText]="emailAlreadyInUse() ? 'Ya existe una cuenta con ese email.' : 'Introduce un email válido.'"
             [class.ion-invalid]="(form.controls.email.touched && form.controls.email.invalid) || emailAlreadyInUse()"
             [class.ion-touched]="form.controls.email.touched || emailAlreadyInUse()"
+            [attr.aria-describedby]="(form.controls.email.touched && form.controls.email.invalid) || emailAlreadyInUse() ? 'register-email-error' : null"
           ></ion-input>
         </ion-item>
+        <p class="register__field-error" id="register-email-error" role="alert">
+          {{
+            emailAlreadyInUse()
+              ? 'Ya existe una cuenta con ese email.'
+              : form.controls.email.touched && form.controls.email.invalid
+                ? 'Introduce un email válido.'
+                : ''
+          }}
+        </p>
+
         <ion-item>
           <ion-input
             label="Contraseña"
@@ -26,23 +36,40 @@
             type="password"
             formControlName="password"
             autocomplete="new-password"
-            [errorText]="'La contraseña debe tener al menos 6 caracteres.'"
             [class.ion-invalid]="form.controls.password.touched && form.controls.password.invalid"
             [class.ion-touched]="form.controls.password.touched"
+            [attr.aria-describedby]="form.controls.password.touched && form.controls.password.invalid ? 'register-password-error' : null"
           ></ion-input>
         </ion-item>
+        <p class="register__field-error" id="register-password-error" role="alert">
+          {{
+            form.controls.password.touched && form.controls.password.invalid
+              ? 'La contraseña debe tener al menos 6 caracteres.'
+              : ''
+          }}
+        </p>
+
         <ion-item>
           <ion-input
-            label="Código Familiar"
+            label="Código Secreto"
             labelPlacement="floating"
             type="text"
             formControlName="familyCode"
             autocomplete="off"
-            [errorText]="invalidFamilyCode() ? 'Código familiar incorrecto.' : 'El código familiar es obligatorio.'"
             [class.ion-invalid]="(form.controls.familyCode.touched && form.controls.familyCode.invalid) || invalidFamilyCode()"
             [class.ion-touched]="form.controls.familyCode.touched || invalidFamilyCode()"
+            [attr.aria-describedby]="(form.controls.familyCode.touched && form.controls.familyCode.invalid) || invalidFamilyCode() ? 'register-family-code-error' : null"
           ></ion-input>
         </ion-item>
+        <p class="register__field-error" id="register-family-code-error" role="alert">
+          {{
+            invalidFamilyCode()
+              ? 'Código secreto incorrecto.'
+              : form.controls.familyCode.touched && form.controls.familyCode.invalid
+                ? 'El código secreto es obligatorio.'
+                : ''
+          }}
+        </p>
       </ion-list>
 
       @if (errorMessage()) {

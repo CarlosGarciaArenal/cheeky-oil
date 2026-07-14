@@ -448,3 +448,185 @@ Metodología: lectura de código + trazado manual de las dos preguntas encargada
 ### Veredicto final
 
 **Aprobado para commit.** Las dos preguntas encargadas quedan respondidas con evidencia de código (incluida la implementación real de `collectionData`/`onSnapshot`, no solo su documentación), no lectura superficial: (1) el cruce de datos NO llama a MITECO por favorito individual (una sola petición HTTP por suscripción, cruce O(1) por `Map`) — existe una ineficiencia real pero de bajo impacto (repetir la descarga completa por cada cambio de combustible, sin caché compartida con el mapa), ya conocida y documentada, no introducida sin avisar; (2) el estado vacío está implementado correctamente según el trazado de código, con un hallazgo menor conectado al punto 1 (el spinner tarda más de lo necesario en un caso sin favoritos). **Ninguno de los dos hallazgos es bloqueante:** no hay coste monetario ni de Firebase involucrado, ambos quedan documentados como trabajo futuro explícito. Se deja constancia honesta de que esta auditoría, a diferencia de la de `[[05-autenticacion]]`, no incluye ninguna verificación en navegador ni con cuenta real — la conclusión del punto 2 es evidencia de código, no una comprobación empírica; queda como pendiente explícito, no como algo dado por hecho.
+
+---
+
+## Incidencia: "los marcadores de gasolineras han dejado de aparecer en el mapa" (RF-04)
+
+**Rol:** [REVIEWER] (diagnóstico) → [ARQUITECTO] + [UI-DEV] (corrección, mismo ciclo)
+**Reportado por:** usuario, con logs de consola de `localhost` adjuntos.
+**Archivos modificados:**
+- `src/app/core/services/favorites.service.ts` (**[ARQUITECTO]**: corrige la causa raíz confirmada)
+- `src/app/shared/components/map/map.component.ts` (**[UI-DEV]**: blindaje defensivo adicional)
+
+### Diagnóstico: qué decían realmente los logs
+
+Los logs pegados por el usuario mezclan **dos problemas independientes**, y es importante no confundirlos:
+
+1. **`Calling Firebase APIs outside of an Injection context...` + `Firebase API called outside injection context: collectionData`, con traza hasta `favorites.service.ts:104` → `getFavorites` → `getFavoritesWithPrices` → `favorites-panel.page.ts:100`.** Este es el hallazgo real y corregido en este ciclo (ver abajo).
+2. **`GET .../identitytoolkit/v3/relyingparty/getProjectConfig ... 403 (Forbidden)` con el mensaje `Requests from referer https://cheeky-oil.firebaseapp.com/ are blocked`.** Esto es una restricción de referrer HTTP configurada en la API key de Firebase en Google Cloud Console (recomendada como buena práctica futura por la auditoría de `[[05-autenticacion]]`, y en algún momento aplicada fuera de este repositorio — no hay ningún commit que la introduzca). **No es un bug de código y no lo puede arreglar ni [ARQUITECTO] ni [UI-DEV] con un commit** — requiere ajustar la lista de referrers permitidos en Google Cloud Console → Credentials. Verificado empíricamente en esta auditoría (ver metodología abajo) que esta restricción **no** bloquea el uso normal de la app desde `http://localhost:4300` (las pruebas mediante `curl` con `Referer: http://localhost:4300/` funcionan correctamente contra `identitytoolkit`); solo afecta al iframe interno de ayuda de Firebase Auth (alojado en `authDomain`, que envía su propia `Referer: cheeky-oil.firebaseapp.com`, un mecanismo opcional de sincronización de sesión entre pestañas que Firebase Auth está diseñado para degradar sin más si falla). **No se ha encontrado ninguna relación entre este 403 y los marcadores del mapa** — queda señalado para que el usuario lo revise en Google Cloud Console si le preocupa el ruido en consola, pero fuera del alcance de este commit.
+
+### Metodología: reproducción real, no solo lectura de logs
+
+A diferencia de auditorías anteriores de esta feature (limitadas a análisis de código por no disponer de una cuenta de prueba), en esta se **creó y se eliminó una cuenta de Firebase desechable** vía la API REST pública (`accounts:signUp`/`accounts:delete`, mismo procedimiento ya usado por `[REVIEWER]` en `[[05-autenticacion]]`), y se usó Playwright + Chromium headless contra `ng serve` para iniciar sesión real, navegar a `/home` y `/favoritos`, y observar la consola y el DOM directamente — no solo teorizar a partir del log pegado por el usuario.
+
+### Causa raíz confirmada
+
+`FavoritesService.getFavorites()` llama a `collectionData(...)` (de `rxfire`, re-exportado por `@angular/fire/firestore`). Esta función necesita ejecutarse dentro de un **contexto de inyección de Angular** para resolver internamente `ɵAngularFireSchedulers`/`PendingTasks`/`EnvironmentInjector`, que son los que reenganchan las emisiones del listener de Firestore a la zona de Angular (`observeOn(schedulers.insideAngular)`, confirmado leyendo `node_modules/@angular/fire/fesm2022/angular-fire.mjs`, función `ɵzoneWrap`). `getFavorites()` se invoca desde dos sitios que **no** garantizan ese contexto:
+
+- `MapComponent.ngAfterViewInit()`: una llamada directa, pero `ngAfterViewInit` (a diferencia del constructor) no se ejecuta dentro de un contexto de inyección ambiental en esta versión de Angular — confirmado empíricamente, no solo en teoría (el warning aparece también aquí, no solo en el panel de favoritos).
+- `FavoritesPanelPage`, dentro de un `switchMap()` anidado en un `toObservable(selectedFuel)` — el efecto interno de `toObservable` corre explícitamente fuera de contexto de inyección por diseño de Angular.
+
+Cuando esto ocurre, `@angular/fire` **no lanza una excepción**: cae a un *fallback* silencioso (solo `console.warn`) que sigue funcionando pero sin la reconexión a la zona de Angular — es decir, el listener de Firestore sigue activo y sigue trayendo datos, pero sus emisiones pueden no disparar detección de cambios, dejando la UI que depende de esos datos desactualizada hasta que otro evento fuerza un ciclo de Angular. Esto encaja exactamente con la redacción del propio aviso ("subtle change-detection... bugs") y con un síntoma como "algo que debería actualizarse no se actualiza" — consistente con, aunque no reproducido de forma 100% determinista en este entorno como "0 marcadores" (ver honestidad de la verificación, abajo).
+
+### Corrección [ARQUITECTO]: `favorites.service.ts`
+
+Se inyecta `EnvironmentInjector` en el constructor del servicio (que SÍ corre siempre en contexto de inyección) y se envuelve la llamada a `collectionData(...)` dentro de `runInInjectionContext(this.environmentInjector, () => ...)`. Corregido **una sola vez, dentro del propio servicio** — ningún consumidor (`MapComponent`, `FavoritesPanelPage`, ni ninguno futuro) necesita saber ni preocuparse de en qué contexto llama a `getFavorites()`. Verificado con Playwright: la línea específica `Firebase API called outside injection context: collectionData` **desaparece por completo**, tanto en `/home` como en `/favoritos`, tras el fix.
+
+### Corrección [UI-DEV]: `map.component.ts` (defensa en profundidad)
+
+Independientemente de la causa raíz ya corregida, se reordenó `ngAfterViewInit()` para que la suscripción a favoritos (funcionalidad **secundaria**: resaltar qué gasolineras ya son favoritas en el popup) se ejecute **después** de disparar la carga de ubicación/estaciones (funcionalidad **principal**: los marcadores del mapa), y se extrajo a un método `subscribeFavorites()` envuelto en `try/catch`. Motivo: `getFavorites()` no es una función `async`, así que un `throw` síncrono en ese punto (por la razón que sea, incluida cualquier futura de una dependencia de terceros fuera de nuestro control) rompería el resto de `ngAfterViewInit()` — el mismo patrón de bug, aunque con un disparador distinto, que ya se encontró y corrigió para el caso "sin sesión" en una auditoría [REVIEWER] anterior de esta misma feature. Con este cambio, un fallo futuro en la parte de favoritos queda estructuralmente incapaz de impedir que el mapa cargue sus marcadores.
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`**: pasan sin errores.
+- **Playwright + cuenta de prueba real (creada y eliminada en esta auditoría), antes y después del fix:**
+  - Antes del fix: login → `/home` → **50 marcadores renderizados** en el DOM (`.app-map-icon--station`), con el warning de `collectionData` presente en consola. **No se pudo reproducir "0 marcadores" en este entorno** — se documenta con honestidad: el fix se aplica porque el defecto subyacente es real y confirmado (no porque se haya logrado reproducir el síntoma exacto reportado por el usuario en este entorno concreto, posiblemente dependiente de timing/red/dispositivo).
+  - Después del fix: login → `/home` → 50 marcadores renderizados igual, **sin** la línea `Firebase API called outside injection context: collectionData` en consola.
+  - `/favoritos` con la misma cuenta (0 favoritos reales): se renderizó correctamente el estado vacío ("Aún no has guardado ninguna gasolinera favorita..."), **cerrando en ejecución real el pendiente que la auditoría anterior de este documento había dejado apoyado solo en lectura de código** (punto 2 de la sección "Auditoría [REVIEWER]: panel de favoritos").
+  - Cuenta de prueba eliminada (`accounts:delete` confirmado) al terminar; no queda ningún usuario de prueba en el proyecto Firebase real.
+- [ ] ⚠️ **No resuelto, y fuera del alcance de un commit:** el 403 de `identitytoolkit`/`getProjectConfig` (restricción de referrer HTTP en Google Cloud Console) — señalado al usuario, no corregible desde este repositorio.
+- [ ] ⚠️ **Pendiente, no perseguido en este ciclo:** tras el fix, sigue apareciendo UNA vez por carga de página el aviso genérico "Calling Firebase APIs outside of an Injection context..." (sin la línea específica de `collectionData`), de nivel `VERBOSE` según el propio código de `@angular/fire` (menos severo que el `WARN` ya corregido). No se pudo identificar con certeza su origen exacto en este ciclo (candidato más probable: `user(auth)`/`authState$` de `AuthService`, u otra utilidad de `@angular/fire/auth`) — no afecta a los marcadores del mapa (verificado: siguen renderizando 50/50 con este aviso presente) y no es lo que reportó el usuario. Queda anotado para una investigación futura, no bloqueante.
+
+### Veredicto
+
+**Corregido.** La causa raíz confirmada (llamada a `collectionData` fuera de contexto de inyección de Angular, verificada leyendo el propio código de `@angular/fire` y reproducida en navegador real) se corrigió en `FavoritesService.getFavorites()` (`[[ARQUITECTO]]`), con una capa adicional de robustez en `MapComponent` (`[[UI-DEV]]`) para que la funcionalidad de favoritos nunca pueda volver a bloquear la carga de marcadores, sea cual sea la causa. No se pudo reproducir el síntoma exacto "0 marcadores" en este entorno de pruebas, así que se documenta honestamente esa limitación en vez de afirmar una causalidad 100% probada — pero el defecto identificado es real, coincide exactamente con la evidencia de los logs aportados por el usuario, y su corrección es de bajo riesgo. Se identificó además un segundo problema (403 de referrer HTTP) que es de infraestructura, no de código, y se ha comunicado explícitamente como tal para no confundirlo con este commit.
+
+---
+
+## Corrección de bugs de UI: formulario que "salta" y botón de volver oculto
+
+**Rol:** [UI-DEV]
+**Reportado por:** usuario, tras probar login/registro y el panel de favoritos.
+**Archivos modificados:**
+- `src/app/pages/login/login.page.html` / `.scss`
+- `src/app/pages/register/register.page.html` / `.scss`
+- `src/app/pages/favorites-panel/favorites-panel.page.html` / `.scss`
+
+### Bug 1: el formulario de login/registro se desplaza hacia arriba al mostrarse un error de campo
+
+**Causa confirmada** (inspeccionando el código fuente de `@ionic/core`, componente `input.js`/`input.md.css`, no solo su documentación): `ion-input` con `[errorText]` renderiza SIEMPRE dos `<div>` dentro de su shadow DOM (`.helper-text`/`.error-text`), pero `.error-text` tiene `display: none` hasta que el campo pasa a `ion-touched.ion-invalid`, momento en el que pasa a `display: block` y ocupa una línea de alto. `.login__wrapper`/`.register__wrapper` centran su contenido con `justify-content: center` sobre `min-height: 100%`: cada vez que esa altura cambiaba (al aparecer/desaparecer el error), el navegador recalculaba el centrado vertical y todo el bloque (logo, título, campos) se desplazaba — el "salto hacia arriba" que describió el usuario.
+
+**Corrección:** se dejó de usar `[errorText]` de `ion-input` (cuya altura no es controlable desde fuera de su shadow DOM) y se sustituyó por un `<p>` propio, en DOM normal (fuera del shadow DOM de Ionic, así que su altura SÍ es controlable desde `login.page.scss`/`register.page.scss`), colocado justo debajo de cada `ion-item`. Ese párrafo está SIEMPRE presente con `min-height: 1.2em` reservado — solo cambia el texto que contiene (vacío o el mensaje), nunca su presencia en el DOM — así que `.login__wrapper`/`.register__wrapper` nunca cambian de altura total y el centrado no se recalcula. Se mantiene la asociación de accesibilidad que antes daba Ionic automáticamente, ahora explícita: `[attr.aria-describedby]` en cada `ion-input` apunta al `id` del párrafo correspondiente solo cuando el campo está inválido y tocado.
+
+**Verificado con Playwright:** se midió la posición de `.login__wrapper` antes y después de tocar el campo de email y dejarlo vacío (sin rellenar) — desplazamiento en Y: **0px**. Captura de pantalla confirma el mensaje "Introduce un email válido." visible en su sitio, sin mover el resto del formulario.
+
+### Bug 2: el panel de favoritos no muestra el botón "Volver al mapa"
+
+**El botón SÍ existe en el código** (ya se añadió en el ciclo original de esta feature) — el bug es que queda **oculto detrás de la cabecera translúcida global**. Se comprobó con una captura de pantalla real (sesión de prueba) que el botón se renderiza en `y ≈ 8px`, justo donde también se dibuja `ion-header` (`height: 56px`, `z-index: 10`) — el botón, con `z-index` menor, queda tapado.
+
+**Causa confirmada inspeccionando el DOM real** (no solo CSS de la plantilla): `ion-router-outlet` (definido en `app.component.html`, fuera del árbol de cada página) es `position: absolute; inset: 0`, así que ocupa TODO el viewport, incluida la franja donde se pinta la cabecera. Como la cabecera global vive en `AppComponent` y no dentro de cada página, la auto-detección de espacio de `ion-content` (pensada para un `ion-header` hermano DENTRO de la misma página) no tiene forma de encontrarla — probé primero quitando `[fullscreen]="true"` (hipótesis inicial, descartada tras medir que no cambiaba nada) antes de confirmar la causa real por inspección directa del DOM.
+
+**Corrección:** mismo patrón ya usado por `MapComponent` para su selector de combustible flotante (`.map__fuel-filter`, `map.component.scss`): `padding-top: calc(env(safe-area-inset-top, 0px) + 56px + 12px)` en `.favorites-panel__wrapper`, dejando espacio explícito para la cabecera + el "notch"/isla dinámica del dispositivo. Se mantiene `ion-content` sin `[fullscreen]`, ya que esta pantalla no necesita el efecto de contenido "sangrando" bajo la cabecera (a diferencia del mapa).
+
+**Verificado con Playwright:** antes del fix, `.favorites-panel__back` medía `y: 8` (oculto tras la cabecera); después del fix, `y: 68` (56px de cabecera + 12px de margen), visible y clicable. Captura de pantalla confirma "← VOLVER AL MAPA" visible en naranja bajo la cabecera.
+
+### Sobre "los marcadores siguen sin aparecer" (mencionado por el usuario, no perseguido en este ciclo)
+
+El usuario indicó que, en su máquina, los marcadores no aparecen mientras `ng serve` está en marcha pero sí al detenerlo — y explícitamente pidió no perseguirlo todavía si a mí me funciona. **Confirmado que funciona correctamente en este entorno de pruebas**: con una cuenta real y Playwright contra el mismo `ng serve`, los marcadores se renderizaron (50/50) de forma consistente en varias ejecuciones de este mismo ciclo, incluso después de los cambios de esta sesión. La causa que describe el usuario ("con `ng serve` no, al pararlo sí") no encaja con nada de lo auditado hasta ahora — no se ha investigado más por petición explícita del propio usuario. Queda pendiente para un ciclo futuro si el problema persiste.
+
+### Verificación general
+
+`npx tsc --noEmit`, `npm run lint` y `ng build --configuration development` pasan sin errores tras los tres cambios de este ciclo.
+
+---
+
+## Corrección de contraste y percepción de velocidad en las tarjetas de favoritos
+
+**Rol:** [UI-DEV]
+**Reportado por:** usuario, tras probar el panel con datos reales: tarjeta y texto casi ilegibles (blanco sobre blanco), y ~3 segundos de espera hasta ver la lista.
+**Archivos modificados:**
+- `src/app/pages/favorites-panel/favorites-panel.page.ts`
+- `src/app/pages/favorites-panel/favorites-panel.page.html`
+- `src/app/pages/favorites-panel/favorites-panel.page.scss`
+
+### Bug 3: tarjetas casi ilegibles (texto y fondo casi blancos)
+
+**Causa:** `.favorite-card` y su texto usaban variables de paso genéricas de Ionic (`--ion-color-step-50`, `--ion-color-medium`, color de texto heredado sin fijar) en vez de colores explícitos. En la práctica, tarjeta y texto salían ambos casi blancos, sin contraste suficiente para leer marca/dirección/precio.
+
+**Corrección:** se sustituyeron esas variables por la MISMA pareja naranja ya usada y verificada (WCAG AA, ≥4.5:1) en el popup de gasolinera del mapa (`global.scss`, `.gas-station-popup`) — fondo `#fff4ec` / texto `#7a2e0e` en claro, fondo `#2b1c12` / texto `#ffd9b8` en oscuro, con `#c2410c`/`#ff8a5b` para el nombre de marca (acento) y `#9a5a34`/`#c99368` para dirección/precio-no-disponible (verificados aparte: 5.0:1 y 6.14:1 respectivamente). Así el panel de favoritos queda visualmente consistente con el resto de la interfaz (map, popup), como pidió el usuario, y con el contraste ya validado en ese otro sitio.
+
+**Verificado con Playwright** (cuenta de prueba real, un favorito guardado): capturas de pantalla en claro y oscuro confirman marca/dirección/precio claramente legibles sobre el nuevo fondo naranja claro/oscuro.
+
+### Petición: reducir el tiempo de carga percibido de la lista
+
+**Diagnóstico:** el usuario atribuía la lentitud a Firestore ("hay pocos documentos"), pero la causa real es la otra mitad de `getFavoritesWithPrices()`: `combineLatest` espera a que se complete TAMBIÉN la descarga completa de MITECO (~11.500 estaciones) antes de emitir nada — con pocos favoritos, Firestore responde casi al instante, pero el usuario no veía NADA hasta que la descarga de MITECO (la parte lenta) también terminaba. Esto es, además, el mismo mecanismo ya señalado como hallazgo menor en la auditoría [REVIEWER] anterior de este documento (el estado vacío tardaba de más por el mismo motivo).
+
+**Corrección:** se separó `FavoritesPanelPage` en dos flujos independientes, en vez de uno solo bloqueado por el más lento:
+1. **Lista (`favoritos`, `Favorite[]`):** una suscripción directa a `getFavorites()` (solo Firestore, rápida), de la que depende `loading`/el estado vacío. La lista de nombres/direcciones aparece en cuanto Firestore responde, sin esperar a MITECO.
+2. **Precios (`preciosPorId`, `Map<string, FavoriteWithPrice>`):** sigue con `switchMap` sobre `getFavoritesWithPrices(fuel)` (Firestore + MITECO cruzados), pero ya NO bloquea `loading` — cada tarjeta muestra su propio indicador ("Cargando precio…") mientras tanto, y se actualiza sola en cuanto los precios llegan (`preciosPorId` es una signal independiente).
+
+Un `computed()` (`cardsView`) combina ambas señales en la plantilla (`{favorito, precioInfo}` por tarjeta), evitando anidar `preciosPorId()?.get(id)` repetidamente en el `@for`.
+
+**Verificado con Playwright, con tiempos reales medidos** (cuenta de prueba real, un favorito guardado, misma sesión que la verificación de contraste):
+- Tarjeta (lista, Firestore) visible a los **963 ms** desde la navegación a `/favoritos`.
+- Precio (MITECO) resuelto a los **3.609 ms**.
+
+Es decir: el usuario ve la gasolinera guardada (nombre, dirección) en menos de 1 segundo — antes tenía que esperar los ~3,6 segundos completos para ver cualquier cosa. La descarga de MITECO sigue tardando lo mismo (es una API externa, gratuita, sin control sobre su latencia — la recomendación de cachearla entre `MapComponent`/`FavoritesPanelPage`, ya señalada como trabajo futuro de `[[ARQUITECTO]]` en la sección "Seguridad y Costes" de este documento, seguiría reduciendo esa segunda cifra en un ciclo futuro), pero ya no bloquea la parte de la pantalla que el usuario necesita ver primero.
+
+### Verificación
+
+`npx tsc --noEmit`, `npm run lint` y `ng build --configuration development` pasan sin errores. Verificación en navegador real con Playwright y una cuenta de prueba desechable (creada, usada para guardar un favorito real desde el mapa, y eliminada junto con su documento de Firestore al terminar) — no solo lectura de código.
+
+---
+
+## Auditoría [REVIEWER]: contraste y velocidad del panel de favoritos
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/pages/favorites-panel/favorites-panel.page.ts` / `.html` / `.scss`
+- `src/app/core/services/favorites.service.ts`
+
+Metodología: lectura de código + trazado manual de la nueva cadena RxJS, apoyado en `npx tsc --noEmit`, `npm run lint`, `ng build`, y verificación en navegador real (Playwright + cuenta de prueba desechable, creada y eliminada en esta auditoría) contra `ng serve`.
+
+### Hallazgo 1 (CONFIRMADO, corregido en esta misma auditoría): la separación en dos flujos duplicaba el listener de Firestore
+
+Al revisar el código recién escrito por [UI-DEV] para desacoplar "lista rápida" de "precio lento", encontré que la implementación inicial creaba **dos suscripciones independientes** a `getFavoritesService.getFavorites()`: una directa (para la lista) y otra indirecta, dentro de `getFavoritesWithPrices()` (para el precio). Cada `.subscribe()` sobre un `Observable` de `collectionData` (no compartido) abre su PROPIO listener `onSnapshot` de Firestore — con esto, cada carga de la pantalla costaba el DOBLE de lecturas de Firestore (hasta 20 en vez de 10 al abrir, y el doble en cada cambio posterior) para exactamente el mismo dato, en contra del principio de "minimiza lecturas/escrituras" de la sección 1 de `CLAUDE.md`.
+
+**Corrección aplicada** (antes de dar por buena esta auditoría, mismo criterio que auditorías [REVIEWER] anteriores de esta feature: corregir defectos confirmados, no solo señalarlos):
+- `FavoritesService.mergeWithPrices()` pasó de `private` a público — es una función pura (sin acceso a Firestore/MITECO por sí misma), segura de exponer.
+- `FavoritesPanelPage` ahora abre `getFavorites()` UNA sola vez, envuelto en `shareReplay({ bufferSize: 1, refCount: true })`: la lista rápida y el cruce de precios reutilizan la MISMA suscripción/listener — solo se abre un `onSnapshot` real, que se cierra solo cuando ambos consumidores se desuscriben.
+
+### Hallazgo 2 (CONFIRMADO, corregido en el mismo cambio): una primera versión de la corrección reintroducía una regresión ya resuelta
+
+Al implementar el hallazgo 1, mi primer intento envolvió `combineLatest([favoritos$, selectedFuel$])` dentro de un único `switchMap`, lo que significaba que **cualquier cambio en la lista de favoritos (añadir/quitar) volvía a disparar una descarga completa de MITECO** (~11.500 estaciones) — exactamente el problema que el diseño original de `getFavoritesWithPrices()` evitaba a propósito con su `combineLatest` plano (documentado explícitamente en su propio código: "`combineLatest`, no `switchMap`, a propósito... NO vuelve a pedirlo cada vez que `getFavorites()` emite"). Detectado y corregido antes de terminar esta auditoría: la descarga de MITECO (`estacionesPorFuel$`) ahora depende con `switchMap` SOLO de `selectedFuel`, no de los favoritos; el cruce final (`combineLatest([favoritos$, estacionesPorFuel$])`) es plano, así que una alta/baja de favorito recombina con la última respuesta de MITECO ya cacheada, sin pedirla de nuevo.
+
+### Contraste de color (bug 3)
+
+- [x] **Verificado matemáticamente (fórmula de contraste W3C), no solo "a ojo"**, cada par texto/fondo nuevo: `#7a2e0e`/`#fff4ec` → 8.72:1; `#c2410c`/`#fff4ec` → 4.79:1; `#9a5a34`/`#fff4ec` → 5.0:1; y sus equivalentes en oscuro (`#ffd9b8`/`#2b1c12` → 12.42:1; `#ff8a5b`/`#2b1c12` → 7.07:1; `#c99368`/`#2b1c12` → 6.14:1). Todos superan el umbral WCAG AA de 4.5:1 para texto normal.
+- [x] **Reutiliza una paleta YA verificada en producción** (`.gas-station-popup` de `global.scss`), no colores inventados sin precedente — consistente con lo pedido explícitamente por el usuario ("como en el resto de la interfaz").
+- [x] **Verificado en navegador real, en claro y en oscuro**, con una gasolinera real guardada como favorita: capturas de pantalla confirman marca/dirección/precio claramente legibles en ambos temas.
+- [x] **Las tarjetas `--cheapest`/`--most-expensive` (verde/rojo) siguen siendo legibles** con el nuevo fondo naranja de base: sus propios fondos (`#f0fdf4`/`#fef2f2` claro, sus equivalentes translúcidos en oscuro) son igual de claros que el fondo naranja base, así que el mismo texto oscuro (`#7a2e0e`) mantiene un contraste equivalente (~8.99:1, verificado) sobre ellos — no hacía falta una tercera variante de color de texto por estado.
+
+### Velocidad percibida
+
+- [x] **Diagnóstico correcto, contrario a la intuición del usuario:** no es Firestore lo lento (confirmado: la lista, que solo depende de Firestore, tarda 440-960 ms en las distintas ejecuciones de esta auditoría) — es la descarga completa de MITECO (~11.500 estaciones) de la que depende el PRECIO, tardando 3,6-4,4 s en las mismas ejecuciones.
+- [x] **La solución (separar lista de precio) ataca la causa real**, no un síntoma — y de paso resuelve el hallazgo menor ya abierto en la auditoría [REVIEWER] anterior de este documento ("el estado vacío tarda de más esperando a MITECO"): ahora el estado vacío también depende solo de `getFavorites()` (rápido).
+- [x] **Verificado con tiempos reales medidos en navegador** (no solo razonamiento): en las ejecuciones de esta auditoría, la tarjeta apareció entre 440 y 963 ms tras navegar a `/favoritos`, siempre muy por debajo del tiempo total anterior (~3,6-4 s).
+- [x] **`preciosPorId: Map<...> | null` (no un array vacío como valor inicial) distingue correctamente "aún cargando" de "cargó, sin resultado"** — revisado el `computed` `cardsView` y la plantilla: con `null`, cada tarjeta muestra su propio spinner "Cargando precio…"; con un `Map` ya resuelto (incluso vacío tras un error), cae a "Precio no disponible" en vez de quedarse en estado de carga para siempre. Caso borde comprobado por lectura de código: un error en `estacionesPorFuel$` emite `{ fuel, estaciones: [] }`, que via `combineLatest` sigue produciendo un `Map` (vacío) — no dejaría las tarjetas colgadas en el spinner.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **Sin fugas de memoria nuevas:** las tres suscripciones del constructor (`favoritos$` directa, y el `combineLatest` de precios) usan `takeUntilDestroyed(this.destroyRef)`. `shareReplay({ refCount: true })` cierra su listener interno de Firestore cuando el último suscriptor se desuscribe (ambos consumidores, al destruirse el componente) — no queda un listener huérfano.
+- [x] **Coste de Firestore reconfirmado tras la corrección del hallazgo 1:** UN único listener de `getFavorites()` por visita a la pantalla (hasta 10 lecturas iniciales + 1 por cambio real), igual que en `MapComponent` — ya no el doble.
+- [x] **Coste de MITECO reconfirmado tras la corrección del hallazgo 2:** una descarga completa por cambio de combustible (ya documentado y aceptado en ciclos anteriores), CERO descargas adicionales por añadir/quitar un favorito — recuperando el comportamiento ya documentado del diseño original.
+- [ ] ⚠️ **No verificado en esta auditoría, por limitación de la herramienta de prueba, no del código:** el recálculo de precio al cambiar de combustible en el `ion-select`. Se intentó repetidamente automatizar el click sobre el popover nativo de Ionic (basado en shadow DOM/radios internos) con Playwright, sin éxito consistente (el valor no cambiaba de forma fiable vía automatización, incluso simulando el evento `ionChange` directamente). El mecanismo de entrada (`(ionChange)="onFuelChange($event)"`, el propio `onFuelChange`) es EXACTAMENTE el mismo que ya usaba la versión anterior del componente (sin cambios en este ciclo) — el único código nuevo es lo que ocurre DESPUÉS de que `selectedFuel` cambia, ya verificado por trazado manual de los operadores RxJS (hallazgo 2) y por `tsc`. Se documenta la limitación con honestidad en vez de afirmar una verificación que no se completó.
+
+### Pendiente explícito (no bloqueante)
+
+- **Verificación en navegador del cambio de combustible** (ver punto anterior) — recomendado para un ciclo futuro, con una herramienta capaz de automatizar el popover nativo de Ionic con fiabilidad, o verificación manual directa por el usuario.
+- Pendientes ya heredados de auditorías anteriores de este documento (caché compartida de MITECO entre `MapComponent`/`FavoritesPanelPage`, Firestore Security Rules) — no agravados ni resueltos por este ciclo.
+
+### Veredicto final
+
+**Aprobado para commit.** Contraste de color verificado matemáticamente y en navegador real (claro/oscuro), reutilizando una paleta ya probada en producción. Velocidad percibida corregida atacando la causa real (MITECO, no Firestore), con tiempos medidos que confirman una mejora de ~4x en cuándo aparece la lista. Durante esta misma auditoría se encontraron y corrigieron DOS regresiones de coste introducidas por la propia solución (listener de Firestore duplicado; MITECO re-descargado en cada alta/baja de favorito) antes de aprobar el commit — ninguna de las dos llegó a quedar en el código final. Queda un único pendiente no bloqueante, documentado con honestidad: no se pudo automatizar la verificación en navegador del cambio de combustible por una limitación de la herramienta de pruebas, no del código.

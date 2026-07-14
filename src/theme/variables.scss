@@ -1,2 +1,28 @@
 // For information on how to create your own theme, please refer to:
 // https://ionicframework.com/docs/theming/
+
+/**
+ * Color de marca ("Naranja Fuego", ver `src/assets/logo.svg` y los marcadores
+ * de gasolinera de `map.component.ts`) aplicado al color `primary` de Ionic
+ * — así CUALQUIER `ion-button`/enlace que use `--ion-color-primary` (los
+ * botones de login/registro, los enlaces "¿No tienes cuenta?"/"Inicia
+ * sesión") queda consistente desde un único punto, sin fijar colores sueltos
+ * componente a componente.
+ *
+ * Contraste elegido a propósito: un naranja MÁS CLARO que el `#FF512F` de los
+ * marcadores del mapa, con texto oscuro (no blanco) encima. Un naranja claro
+ * con texto blanco no pasa WCAG AA (los naranjas claros tienen luminancia
+ * demasiado alta para que el blanco contraste 4.5:1 con ellos) — verificado
+ * con la fórmula de contraste W3C: `#FF7A45` con texto blanco da ~2.6:1
+ * (falla), con `#3D1400` da ~8.1:1 (aprueba con margen). Mismo patrón ya
+ * usado en el popup de gasolinera (`global.scss`: fondo claro + texto oscuro
+ * para contraste), aplicado aquí al color de marca en vez de a un tono pastel.
+ */
+:root {
+  --ion-color-primary: #ff7a45;
+  --ion-color-primary-rgb: 255, 122, 69;
+  --ion-color-primary-contrast: #3d1400;
+  --ion-color-primary-contrast-rgb: 61, 20, 0;
+  --ion-color-primary-shade: #e06b3d;
+  --ion-color-primary-tint: #ff8758;
+}

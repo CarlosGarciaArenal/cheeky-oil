@@ -1,4 +1,22 @@
-<ion-content class="favorites-panel" [fullscreen]="true">
+<!--
+  Sin `[fullscreen]="true"`: esta pantalla es una lista de texto normal, sin
+  nada que "sangrar" bajo la cabecera (a diferencia del mapa, pensado para
+  verse a pantalla completa por debajo del header translúcido).
+
+  OJO — `fullscreen` NO es la causa del bug real que hubo aquí (botón
+  "Volver al mapa" oculto tras la cabecera, reportado por el usuario):
+  inspeccionando el DOM real se confirmó que `ion-router-outlet` (en
+  `app.component.html`) es `position: absolute; inset: 0`, ocupando TODO el
+  viewport (incluida la franja donde se dibuja la cabecera) — con o sin
+  `fullscreen`. La cabecera global vive en `AppComponent`, FUERA del árbol de
+  cada página, así que la auto-detección de Ionic (que solo busca un
+  `ion-header` DENTRO de la misma página) nunca la encuentra. `MapComponent`
+  ya tuvo que resolver el mismo problema a mano para su selector flotante
+  (`.map__fuel-filter`, `map.component.scss`) — aquí se aplica el mismo
+  `padding-top` calculado en `.favorites-panel__wrapper` (ver
+  `favorites-panel.page.scss`), no algo que ion-content resuelva solo.
+-->
+<ion-content class="favorites-panel">
   <div class="favorites-panel__wrapper">
     <ion-button class="favorites-panel__back" fill="clear" routerLink="/home" aria-label="Volver al mapa">
       <ion-icon slot="start" name="arrow-back-outline"></ion-icon>
@@ -39,21 +57,21 @@
       </div>
     } @else {
       <ul class="favorites-panel__list">
-        @for (favorito of favoritos(); track favorito.id) {
+        @for (item of cardsView(); track item.favorito.id) {
           <li
             class="favorite-card"
             [ngClass]="{
-              'favorite-card--cheapest': favorito.isCheapest,
-              'favorite-card--most-expensive': favorito.isMostExpensive,
+              'favorite-card--cheapest': item.precioInfo?.isCheapest,
+              'favorite-card--most-expensive': item.precioInfo?.isMostExpensive,
             }"
           >
-            @if (favorito.isCheapest) {
+            @if (item.precioInfo?.isCheapest) {
               <p class="favorite-card__badge favorite-card__badge--cheapest">
                 <ion-icon name="medal-outline" aria-hidden="true"></ion-icon>
                 Más barata de tus favoritas
               </p>
             }
-            @if (favorito.isMostExpensive) {
+            @if (item.precioInfo?.isMostExpensive) {
               <p class="favorite-card__badge favorite-card__badge--most-expensive">
                 <ion-icon name="trending-up-outline" aria-hidden="true"></ion-icon>
                 Más cara de tus favoritas
@@ -62,13 +80,17 @@
 
             <div class="favorite-card__body">
               <div class="favorite-card__info">
-                <strong class="favorite-card__marca">{{ favorito.marca }} — {{ favorito.municipio }}</strong>
-                <span class="favorite-card__direccion">{{ favorito.direccion }}</span>
+                <strong class="favorite-card__marca">{{ item.favorito.marca }} — {{ item.favorito.municipio }}</strong>
+                <span class="favorite-card__direccion">{{ item.favorito.direccion }}</span>
               </div>
 
               <div class="favorite-card__precio">
-                @if (favorito.precio !== null) {
-                  {{ favorito.precio.toFixed(3) }} €
+                @if (item.precioInfo === null) {
+                  <span class="favorite-card__precio--cargando">
+                    <ion-spinner name="dots" aria-label="Cargando precio..."></ion-spinner>
+                  </span>
+                } @else if (item.precioInfo.precio !== null) {
+                  {{ item.precioInfo.precio.toFixed(3) }} €
                 } @else {
                   <span class="favorite-card__precio--indisponible">Precio no disponible</span>
                 }
@@ -80,11 +102,11 @@
               fill="clear"
               color="medium"
               size="small"
-              [disabled]="removingId() === favorito.id"
-              (click)="onRemove(favorito)"
-              [attr.aria-label]="'Quitar ' + favorito.marca + ' de favoritos'"
+              [disabled]="removingId() === item.favorito.id"
+              (click)="onRemove(item.favorito)"
+              [attr.aria-label]="'Quitar ' + item.favorito.marca + ' de favoritos'"
             >
-              @if (removingId() === favorito.id) {
+              @if (removingId() === item.favorito.id) {
                 <ion-spinner name="crescent" aria-label="Quitando..."></ion-spinner>
               } @else {
                 <ion-icon slot="start" name="trash-outline"></ion-icon>

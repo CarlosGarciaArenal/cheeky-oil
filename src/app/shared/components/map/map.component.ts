@@ -264,18 +264,14 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.map.on('popupopen', (event: L.PopupEvent) => this.onPopupOpen(event));
     this.map.on('popupclose', (event: L.PopupEvent) => this.onPopupClose(event));
 
-    // Favoritos del usuario activo (RF-04): listener en vivo, acotado a un
-    // máximo de 10 documentos (`MAX_GASOLINERAS_GUARDADAS`). Se limpia solo
-    // vía `takeUntilDestroyed`, igual que el resto de suscripciones de este
-    // componente (sección 3 de `CLAUDE.md`).
-    this.favoritesService
-      .getFavorites()
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: (favoritos) => this.favoriteIds.set(new Set(favoritos.map((favorito) => favorito.id))),
-        error: (error: Error) => this.stationsError.set(error.message),
-      });
-
+    // La carga del mapa/marcadores (la funcionalidad PRINCIPAL de este
+    // componente) se dispara ANTES que la suscripción a favoritos, y en una
+    // sentencia propia sin nada detrás que dependa de ella. Orden deliberado
+    // (hallazgo de una auditoría [REVIEWER], ver `docs/features/06-favoritos.md`):
+    // si `subscribeFavorites()` (una funcionalidad SECUNDARIA, el resaltado
+    // de favoritos en el popup) fallara de forma síncrona por cualquier
+    // motivo, esta línea ya se ha ejecutado y los marcadores ya están en
+    // camino de dibujarse — no dependen de que favoritos funcione.
     this.locationService
       .getCurrentPosition()
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -290,6 +286,41 @@ export class MapComponent implements AfterViewInit, OnDestroy {
           this.loadNearestStations({ lat: DEFAULT_CENTER[0], lng: DEFAULT_CENTER[1] });
         },
       });
+
+    this.subscribeFavorites();
+  }
+
+  /**
+   * Favoritos del usuario activo (RF-04): listener en vivo, acotado a un
+   * máximo de 10 documentos (`MAX_GASOLINERAS_GUARDADAS`). Se limpia solo
+   * vía `takeUntilDestroyed`, igual que el resto de suscripciones de este
+   * componente (sección 3 de `CLAUDE.md`).
+   *
+   * Envuelto en `try/catch` a propósito (hallazgo de una auditoría
+   * [REVIEWER], ver `docs/features/06-favoritos.md`): `FavoritesService.getFavorites()`
+   * NO es una función `async` — un `throw` síncrono ahí (por la razón que
+   * sea, incluida cualquier futura de una librería de terceros como
+   * `@angular/fire`, fuera de nuestro control) rompería `ngAfterViewInit()`
+   * en el punto exacto en que se llama, y todo lo que viniera DESPUÉS en ese
+   * método dejaría de ejecutarse. Ya se movió esta llamada al FINAL de
+   * `ngAfterViewInit()` (ver comentario de arriba) para que ese escenario no
+   * pueda impedir que el mapa cargue sus marcadores — este `try/catch` es la
+   * segunda capa: aunque en el futuro se añadiera código nuevo DESPUÉS de
+   * esta llamada, seguiría estando protegido. El resaltado de favoritos es
+   * una mejora sobre el mapa, nunca debe poder romperlo.
+   */
+  private subscribeFavorites(): void {
+    try {
+      this.favoritesService
+        .getFavorites()
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe({
+          next: (favoritos) => this.favoriteIds.set(new Set(favoritos.map((favorito) => favorito.id))),
+          error: (error: Error) => this.stationsError.set(error.message),
+        });
+    } catch (error: unknown) {
+      this.stationsError.set(error instanceof Error ? error.message : 'No se pudieron cargar los favoritos.');
+    }
   }
 
   /**
