@@ -252,8 +252,66 @@ this.invalidateSizeTimeoutId = setTimeout(() => {
 
 ---
 
+## Corrección: mapa roto al volver navegando desde `/favoritos` (sustituye el temporizador fijo por `ResizeObserver`)
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.ts`
+
+### El problema
+
+El bug reportado por el usuario: el mapa se rompe (queda en blanco/mal dimensionado) al navegar de vuelta a `/home` después de haber visitado `/favoritos`. `ngOnDestroy` y la recreación completa de `L.Map` en `ngAfterViewInit` YA estaban implementados correctamente antes de esta corrección (confirmado por lectura de código: `map.remove()`, limpieza de todas las referencias, y una instancia nueva de Leaflet sobre un `<div>` nuevo — Angular crea un elemento del DOM distinto por cada instancia de `MapComponent`, así que no hay colisión de contenedor ni el error clásico de Leaflet "Map container is already initialized").
+
+La causa real era la corrección anterior de este mismo documento (`setTimeout(..., 400)` para forzar `invalidateSize()`): un retardo fijo de 400ms se probó y ajustó contra la transición de ENTRADA inicial a `/home`, pero la transición de VUELTA desde `/favoritos` (`routerLink="/home"` del botón "Volver al mapa") es una animación de Ionic distinta, no necesariamente de la misma duración. Un número fijo de milisegundos es una apuesta calibrada para un caso concreto, no una garantía para todos — si el layout tardaba más de 400ms en asentarse en el camino de vuelta, `invalidateSize()` disparaba demasiado pronto y el mapa quedaba con las dimensiones incorrectas que ya tenía al construirse, sin ninguna otra oportunidad de corregirse.
+
+### La corrección
+
+```ts
+this.resizeObserver = new ResizeObserver(() => {
+  this.map?.invalidateSize();
+});
+this.resizeObserver.observe(this.mapContainerRef.nativeElement);
+```
+
+1. **`ResizeObserver`, no un segundo `setTimeout` con un número mayor.** Subir el retardo (a 800ms, 1000ms...) solo movería el problema, no lo resolvería: seguiría siendo una apuesta de duración fija contra una animación cuya duración real no controla este componente. `ResizeObserver` es la API nativa del navegador pensada exactamente para esto: reacciona al tamaño REAL del contenedor, no a una duración estimada.
+2. **Dispara tanto al empezar a observar como en cada cambio de tamaño posterior** (comportamiento estándar de la API, verificado en la prueba de esta corrección, ver más abajo): cubre la carga inicial de `/home` (mismo caso que ya resolvía el `setTimeout`) Y la vuelta desde `/favoritos` (el caso que fallaba), sin necesitar dos mecanismos distintos para cada uno.
+3. **Sustituye por completo al `setTimeout`/`invalidateSizeTimeoutId`** (eliminado, no añadido al lado): mismo criterio de minimizar complejidad ya aplicado en el resto del proyecto — no tiene sentido mantener un mecanismo de temporización fija sabiendo que es la causa raíz confirmada del bug, en vez de sustituirlo por el mecanismo correcto.
+4. **`this.resizeObserver?.disconnect()` en `ngOnDestroy`**, mismo criterio que ya se auditó para `invalidateSizeTimeoutId`: sin desconectar, el observer seguiría vivo (aunque inofensivo gracias al `?.` dentro de su callback) referenciando un contenedor del DOM que ya no pertenece a ninguna vista activa.
+
+### Verificación
+
+Dado que reproducir esto en la app real requeriría iniciar sesión contra el proyecto de Firebase de producción (no hay emulador configurado en este repo, ver `src/environments/environment.ts`) — y crear una cuenta de prueba ahí escribiría datos reales en la base de datos familiar, algo que esta auditoría ha evitado a propósito — la verificación se hizo de forma aislada, reproduciendo el MECANISMO exacto del bug con Leaflet real (misma versión que usa el proyecto, `node_modules/leaflet`) en un navegador headless (Playwright), sin tocar Angular/Firebase:
+
+1. Se crea un `L.Map` sobre un contenedor con tamaño `0×0` (reproduce la condición exacta del bug: Leaflet inicializado antes de que el layout esté asentado). `map.getSize()` confirma `0×0`.
+2. El contenedor recibe su tamaño final de forma ASÍNCRONA (sin temporizador fijo, para no favorecer la solución de antemano). El `ResizeObserver` corrige el tamaño solo, sin intervención: `map.getSize()` pasa a `400×300`.
+3. Se destruye esa instancia (`resizeObserver.disconnect()` + `map.remove()`) y se crea una SEGUNDA instancia en un contenedor NUEVO (simula volver a `/home`): no lanza ninguna excepción (en particular, no el error clásico "Map container is already initialized" de Leaflet) y calcula su tamaño correctamente desde el principio.
+
+Resultado: `{ ok: true }` en las tres comprobaciones, cero errores de página (`pageerror`) durante toda la ejecución. Esto cierra, con una prueba real (no solo razonamiento), el pendiente que había quedado abierto en la auditoría [REVIEWER] anterior de este documento ("no verificado con una repetición exacta del bug original").
+
+---
+
+## Auditoría [REVIEWER]: `ResizeObserver` y comprobación del bug de navegación
+
+**Rol:** [REVIEWER]
+**Archivo auditado:**
+- `src/app/shared/components/map/map.component.ts`
+
+- [x] **`ngOnDestroy` ya destruía el mapa correctamente ANTES de este cambio** (`map.remove()`, todas las referencias a `null`) — confirmado por lectura de código, no era la causa del bug reportado. Este ciclo no tuvo que corregir nada ahí; solo se añadió `this.resizeObserver?.disconnect()` junto a lo ya existente.
+- [x] **Sin fuga de memoria nueva:** el único recurso nuevo (`ResizeObserver`) se desconecta en `ngOnDestroy`, mismo punto único de limpieza que ya usa el resto del componente (`map.remove()`, `clearTimeout` ya no aplica porque el timer se eliminó por completo).
+- [x] **Sin excepciones ante destrucción temprana:** el callback usa `this.map?.invalidateSize()` (igual que antes), por si el `ResizeObserver` dispara justo en el margen entre que el componente se destruye y su propio `disconnect()` surte efecto.
+- [x] **Sin llamadas a Firestore/Cloud Functions ni cambios en `LocationService`/`FavoritesService`:** impacto en costes = 0, cambio puramente de cómo se detecta el tamaño del contenedor en el cliente.
+- [x] **`npm run lint` y `ng build`** ejecutados tras el cambio: sin errores (aviso preexistente y no relacionado sobre `leaflet` no-ESM).
+- [x] **Verificado con una prueba real del mecanismo** (ver sección de Verificación de arriba), cerrando el pendiente no bloqueante que había dejado abierto la auditoría anterior de este documento.
+
+### Veredicto final
+
+**Aprobado para commit.** La causa raíz del bug reportado (mapa roto al volver desde `/favoritos`) era el temporizador fijo de `invalidateSize()`, calibrado solo contra la transición de carga inicial. Se sustituye por `ResizeObserver`, que reacciona al tamaño real del contenedor sin depender de cuánto dure ninguna animación concreta — cubre tanto la carga inicial como cualquier transición de vuelta. Verificado con una reproducción aislada del mecanismo (Leaflet real, sin tocar Firebase de producción): el escenario que antes fallaba (contenedor con tamaño `0×0` al inicializar, tamaño correcto llegando después) ahora se autocorrige, y destruir/recrear la instancia no lanza ninguna excepción.
+
+---
+
 ## Próximos pasos (fuera de alcance de este documento)
 
 - [UI-DEV] (futuro): usar `watchPosition()` para actualizar el marcador de "mi ubicación" en tiempo real (reutilizando el marcador con `setLatLng`, ver nota de la auditoría), y renderizar marcadores de `GasStation` sobre el mapa.
 - [REVIEWER] (futuro): revisar cobertura de tests unitarios de `LocationService`/`MapComponent` cuando se añadan.
-- [Usuario]: confirmar en un dispositivo/navegador real que el mapa ya no se queda en blanco al entrar sin redimensionar la ventana (ver nota no bloqueante de la auditoría de esta corrección).
+- [Usuario]: confirmar en un dispositivo/navegador real, con sesión iniciada, que volver de `/favoritos` a `/home` ya no rompe el mapa (la verificación de esta corrección fue del mecanismo de Leaflet en aislado, no un recorrido logueado de la app real — ver justificación en la sección de Verificación de arriba).

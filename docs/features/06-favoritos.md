@@ -692,3 +692,159 @@ Comprobación explícita, de extremo a extremo, de que ninguna capa invierte lat
 ### Veredicto final
 
 **Aprobado para commit.** Funcionalidad de coste cero (sin llamadas a Firebase ni MITECO), sin nuevos listeners que gestionar, con la mitigación de seguridad estándar (`noopener noreferrer`) aplicada en los tres puntos de entrada nuevos, y con el orden de coordenadas verificado de extremo a extremo sin ninguna inversión.
+
+---
+
+## Corrección: precio antiguo visible al cambiar de combustible (`isLoading`)
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/pages/favorites-panel/favorites-panel.page.ts` / `.html` / `.scss`
+
+### El problema
+
+Al cambiar el `ion-select` de combustible, el precio mostrado en cada tarjeta se quedaba siendo el del combustible ANTERIOR hasta que llegaba la respuesta de MITECO para el nuevo (recordar: una descarga completa, ~11.500 estaciones, 3-4 s medidos en la auditoría de velocidad de este mismo documento). Causa: `preciosPorId` (el signal del que depende el precio de cada tarjeta) solo se actualiza cuando el `combineLatest([favoritos$, estacionesPorFuel$])` emite un valor nuevo — durante esos 3-4 s de descarga, conservaba el ÚLTIMO `Map` ya resuelto, que seguía siendo el del combustible anterior, sin ninguna señal de que estuviera desactualizado.
+
+### La corrección
+
+```ts
+const estacionesPorFuel$ = toObservable(this.selectedFuel).pipe(
+  tap(() => {
+    this.isLoading.set(true);
+    this.preciosPorId.set(null);
+  }),
+  switchMap((fuel) => /* ...descarga MITECO... */),
+);
+
+// ...
+combineLatest([favoritos$, estacionesPorFuel$])
+  .pipe(/* ... */)
+  .subscribe((favoritosConPrecio) => {
+    this.preciosPorId.set(new Map(/* ... */));
+    this.isLoading.set(false);
+  });
+```
+
+1. **`tap()` ANTES del `switchMap`**, no dentro: se ejecuta de inmediato al cambiar `selectedFuel` (síncrono con el cambio del `ion-select`), no cuando responde MITECO — es justo la señal temprana que faltaba.
+2. **`preciosPorId.set(null)`**, no un `Map` vacío: reutiliza el mecanismo YA existente en la plantilla (`item.precioInfo === null` → spinner "Cargando precio…" por tarjeta, ver `favorites-panel.page.html`) en vez de inventar un segundo estado de carga en paralelo — mismo criterio de `null` como "aún no ha llegado nada" ya documentado para la carga inicial.
+3. **`isLoading` como signal NUEVO y separado de `loading`** (pedido explícitamente por el usuario): `loading` sigue cubriendo solo la carga inicial de Firestore (rápida, gobierna el estado vacío/spinner de página completa); `isLoading` cubre cualquier recálculo de precio posterior. Con un único signal no se podría distinguir "primera carga de la lista" de "recalculando precio tras cambiar de combustible" sin lógica adicional.
+4. **`isLoading.set(false)` en el ÚNICO punto en que se conoce el precio ya actualizado**: el `.subscribe()` del `combineLatest` final — llega ahí tanto si MITECO respondió con éxito como si falló (el `catchError` interno de `estacionesPorFuel$` ya convierte el fallo en `{ fuel, estaciones: [] }`, que sigue fluyendo hasta este mismo `.subscribe()`), así que `isLoading` nunca se queda colgado en `true` ante un error de red.
+5. **Aviso adicional a nivel de página** ("Actualizando precios…" con `ion-spinner`, bajo el selector de combustible): complementa —no sustituye— el spinner por tarjeta ya existente, para que quede claro de un vistazo que TODA la lista se está recalculando, no solo una tarjeta con un precio lento.
+
+### Verificación
+
+- [x] `npm run lint` — sin avisos.
+- [x] `ng build` — compila sin errores (aviso preexistente de presupuesto de CSS del panel de favoritos, ya existente antes de este cambio por la feature de "Cómo llegar"; +577 bytes sobre el límite de aviso de 2 kB con este cambio incluido, lejos del límite de error de 4 kB).
+- [ ] ⚠️ **No verificado en un navegador con sesión real** (mismo motivo que la corrección del mapa, ver `[[02-mapa-base]]`: requeriría credenciales de producción de Firebase). Verificado por trazado manual de la cadena RxJS: `tap` se ejecuta de forma síncrona en cada emisión de `toObservable(this.selectedFuel)` (confirmado por el propio contrato de RxJS `tap`, sin lógica condicional ni asincronía de por medio), así que `isLoading`/`preciosPorId` se actualizan en el mismo tick en que cambia `selectedFuel`, antes de que la petición HTTP a MITECO siquiera se dispare.
+
+### Auditoría [REVIEWER]
+
+- [x] **Coste Firebase/MITECO: cero impacto.** No se añade ninguna petición nueva — se reordena CUÁNDO se limpia un signal ya existente, no cuántas veces se llama a MITECO (sigue siendo una descarga por cambio de combustible, igual que antes de este cambio).
+- [x] **Sin fugas de memoria:** `isLoading` es un signal más, sin suscripción ni listener propio que gestionar.
+- [x] **No reintroduce el hallazgo ya corregido de la auditoría anterior** ("MITECO re-descargado en cada alta/baja de favorito"): el `tap` cuelga de `toObservable(this.selectedFuel)`, la misma fuente que ya disparaba `switchMap` antes de este cambio — añadir/quitar un favorito sigue sin tocar esta cadena.
+
+### Veredicto final
+
+**Aprobado para commit.** Corrige el síntoma reportado (precio desactualizado visible) atacando la causa exacta (`preciosPorId` sin limpiar durante el recálculo), reutilizando el mecanismo de "cargando" ya existente en vez de duplicar estado, y sin coste adicional de Firebase/MITECO. Verificado por lectura y trazado de la cadena RxJS; pendiente no bloqueante la confirmación visual en un navegador con sesión real (mismo motivo que la corrección del mapa de este mismo ciclo).
+
+---
+
+## Marcador amarillo para gasolineras favoritas en el mapa (RF-04)
+
+**Rol:** [ARQUITECTO] + [UI-DEV]
+**Estado:** Implementado
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.ts`
+
+### Qué hace
+
+Cada marcador del mapa se dibuja con un icono distinto según si esa gasolinera está en los favoritos del usuario activo: `FAVORITE_ICON` (chincheta amarilla con una estrella) si está en `favoriteIds`, `STATION_ICON` (chincheta naranja de marca con un círculo) si no.
+
+### Diagrama de Flujo (Mermaid): de un alta/baja de favorito al color del marcador
+
+```mermaid
+flowchart TD
+    A["redraw() dibuja ~50 marcadores"] --> B["favoriteIds leído UNA vez, dentro de untracked()"]
+    B --> C{"¿estacion.id está en favoriteIds?"}
+    C -->|Sí| D[STATION_ICON amarillo/FAVORITE_ICON]
+    C -->|No| E[STATION_ICON naranja]
+    D --> F["marker guardado en markersPorId"]
+    E --> F
+
+    G["Usuario pulsa ⭐ Guardar/Quitar ⭐ en un popup"] --> H["FavoritesService.addFavorite/removeFavorite -> Firestore"]
+    H --> I["listener getFavorites() emite -> favoriteIds.set(...)"]
+    I --> J["effect() del constructor se dispara (SÍ depende de favoriteIds)"]
+    J --> K["syncOpenPopupButton: repinta el botón del popup abierto"]
+    J --> L["syncMarkerIcons: marker.setIcon(...) SOLO en los marcadores ya dibujados"]
+    L --> M["Sin redraw() completo: no se recalculan distancias/orden ni se recrean los ~50 popups"]
+```
+
+### Justificación de Diseño (ARQUITECTO + UI-DEV)
+
+- **Dos señales (color Y forma del glifo interior), no solo color** (`FAVORITE_ICON`: estrella blanca sobre amarillo, en vez del círculo blanco de `STATION_ICON`): mismo criterio de accesibilidad ya aplicado a `USER_ICON` (forma de punto, no de chincheta) para no depender solo del color en usuarios con dificultad para distinguirlos.
+- **Misma FORMA de chincheta que `STATION_ICON`** (a diferencia de `USER_ICON`, que sí cambia de forma): una gasolinera favorita sigue siendo una gasolinera — cambiar la forma entera habría roto esa asociación visual sin necesidad, cuando color + glifo interior ya bastan para diferenciarla.
+- **`markersPorId: Map<string, L.Marker>`, nuevo, paralelo a `estacionesPorId`:** permite que un alta/baja de favorito actualice el icono de UN marcador concreto (`marker.setIcon(...)`, operación barata: Leaflet solo sustituye el nodo DOM del icono) sin disparar un `redraw()` completo — que recalcularía distancias/orden desde cero y recrearía los ~50 popups del mapa solo para cambiar un color. Mismo principio de "minimiza lecturas/escrituras y trabajo" de la sección 1 de `CLAUDE.md`, aplicado aquí al trabajo del cliente (DOM/Leaflet), no solo a Firestore.
+- **`favoriteIds` leído UNA sola vez por `redraw()`, envuelto en `untracked()`, y pasado como parámetro tanto a `buildPopupHtml` como a la selección de icono** (en vez de que cada uno vuelva a leer la signal): evita duplicar la lectura y, sobre todo, mantiene intacta la razón original de `untracked()` — que el `effect()` que llama a `redraw()` siga dependiendo SOLO de `selectedFuel` (ver comentario del constructor); si `redraw()` leyera `favoriteIds()` de forma trackeada, CADA alta/baja de favorito volvería a redibujar los ~50 marcadores enteros, justo el coste que este diseño evita.
+- **Sin llamadas nuevas a Firestore/MITECO:** el cruce es puramente en memoria, contra el mismo `favoriteIds` (Set) que ya mantenía `MapComponent` desde antes de este cambio (RF-04, listener de `FavoritesService.getFavorites()`).
+
+### Verificación
+
+- [x] `npm run lint` / `ng build` — sin errores (mismos avisos preexistentes y no relacionados).
+- [x] **Verificación visual del SVG en aislado** (Playwright, captura de pantalla, sin tocar Angular/Firebase): confirmado que la estrella blanca sobre fondo amarillo se renderiza limpia y reconocible junto al pin naranja normal, no una forma deformada por un error de coordenadas en el `path`.
+- [ ] ⚠️ No verificado en la app real con sesión iniciada (mismo motivo que el resto de correcciones de este ciclo: requeriría credenciales de producción de Firebase, ver `[[02-mapa-base]]`).
+
+### Auditoría [REVIEWER]
+
+- [x] **Coste Firebase/MITECO: cero impacto.** Reutiliza el `favoriteIds` que `MapComponent` ya mantenía en memoria; no se añade ninguna lectura nueva.
+- [x] **No reintroduce el problema que `untracked()` ya evitaba:** confirmado por lectura de código — `redraw()` sigue siendo el único lugar donde se lee `favoriteIds()` de forma no trackeada; el `effect()` que la lee de forma trackeada (constructor) solo llama a `syncOpenPopupButton`/`syncMarkerIcons`, ninguno de los dos toca `stationsLayer` ni recrea marcadores.
+- [x] **Sin fugas de memoria:** `markersPorId` se limpia en cada `redraw()` (junto con `estacionesPorId`) y en `ngOnDestroy`, mismo ciclo de vida ya auditado para el resto de colecciones del componente.
+- [x] **Accesibilidad:** diferenciador de color + forma de glifo (no solo color), mismo criterio ya aprobado para `USER_ICON` en la auditoría original de este documento.
+
+### Veredicto final
+
+**Aprobado para commit.** Cruce de favoritos puramente en memoria, sin coste de Firebase/MITECO adicional, con actualización de icono O(1) por marcador (sin redraw completo) que preserva la optimización de `untracked()` ya auditada para este componente, y con diferenciación visual por color Y forma (glifo), no solo color.
+
+---
+
+## CORRECCIÓN CRÍTICA [ARQUITECTO]: enrutado por texto (rótulo + dirección + localidad), no por coordenadas
+
+**Rol:** [ARQUITECTO]
+**Estado:** Corregido — **sustituye** el diseño de "Navegación externa" documentado más arriba en este mismo archivo.
+**Archivos modificados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/pages/favorites-panel/favorites-panel.page.ts`
+
+### El problema
+
+Reportado por el usuario: las coordenadas (`lat`/`lng`) que expone la API de MITECO no siempre son precisas — la geocodificación de origen varía según cómo cada estación fue dada de alta en el sistema del Ministerio. El diseño anterior de "Cómo llegar" (auditado más arriba en este documento, con una comprobación exhaustiva de que el ORDEN de `lat`/`lng` no estaba invertido en ningún punto de la cadena) confiaba precisamente en esa coordenada como `destination` de Google Maps — y una coordenada mal geocodificada lleva al usuario a un punto que puede no ser la gasolinera real, sin ningún indicio visible de que la ruta está equivocada (a diferencia de, por ejemplo, un error de red, que sí es detectable). El chequeo de "orden de coordenadas sin invertir" de la auditoría anterior seguía siendo válido en sí mismo (nunca hubo una inversión de `lat`/`lng`), pero no protegía contra este problema distinto: coordenadas correctamente ORDENADAS pero incorrectamente PRECISAS en origen.
+
+### La corrección
+
+```ts
+function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localidad: string): string {
+  return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(`${rotulo} ${direccion}, ${localidad}`);
+}
+```
+
+1. **`destination` como texto de búsqueda** (`rótulo + dirección + localidad`), no como par `lat,lng`: Google Maps resuelve el texto con SU PROPIO geocodificador/índice de negocios (el mismo que usa cuando un usuario escribe "Repsol Calle Mayor 5, Madrid" directamente en la app de Maps), con más probabilidad de acertar el punto real que una coordenada bruta de origen incierto.
+2. **Campos usados:** `estacion.marca`/`favorito.marca` (el "rótulo" del enunciado — en este modelo es la marca ya normalizada por `MitecoService.toBrand()`, no el texto crudo de la API, pero identifica la cadena igual de bien para una búsqueda de texto), `direccion` y `municipio` (la "localidad").
+3. **`encodeURIComponent(...)` sobre TODO el texto compuesto**, no campo a campo: evita construir manualmente la concatenación de parámetros de query y sus separadores (`&`, `=`) a mano, y de paso neutraliza cualquier carácter con significado HTML (`<`, `>`, `"`, `&`) que pudiera venir en `direccion`/`municipio` — texto libre de MITECO/Firestore, sin validar (ver `buildPopupHtml`). El resultado es siempre seguro para un atributo `href`, tanto en el `<a>` plano del popup del mapa como en el `[href]` del `ion-button` del panel de favoritos.
+4. **Duplicada en `map.component.ts` y `favorites-panel.page.ts`**, mismo criterio ya aplicado a la versión anterior de esta función y a `FUEL_LABELS`: evita acoplar el panel de favoritos a un componente de UI ajeno por una función de una línea.
+5. **La colocación de los MARCADORES en el mapa (`L.marker([estacion.lat, estacion.lng], ...)`) NO cambia** — sigue usando `lat`/`lng` como siempre, sin tocar esta corrección: el problema de precisión de MITECO afecta a si Google Maps traza bien la RUTA hacia el punto exacto, no a en qué posición aproximada del mapa se dibuja el pin (una imprecisión de unos metros no es perceptible a la escala en que se ve el mapa completo, pero SÍ importa cuando Google Maps traza una ruta paso a paso hasta ese punto exacto).
+
+### Verificación
+
+- [x] **Formato de la URL verificado contra el especificado por el usuario**, carácter a carácter: `'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(rotulo + ' ' + direccion + ', ' + localidad)` — ejecutado con datos de ejemplo (`Repsol`, `Calle Mayor 5`, `Madrid`) y confirmado el resultado (`...destination=Repsol%20Calle%20Mayor%205%2C%20Madrid`).
+- [x] `npm run lint` / `ng build` — sin errores.
+
+### Auditoría [REVIEWER]
+
+- [x] **Coste Firebase/MITECO: cero impacto.** No se añade ninguna petición nueva — `marca`/`direccion`/`municipio` ya estaban cargados en memoria (mismos campos que ya se leían para el nombre/dirección de cada tarjeta/popup).
+- [x] **Seguridad reevaluada tras empezar a usar `direccion`/`municipio` (texto libre, sin validar) en la URL:** `encodeURIComponent` percent-codifica `<`, `>`, `"`, `&`, espacios y comas — no puede quedar ningún carácter capaz de cerrar el atributo `href="..."` o inyectar un atributo/etiqueta nueva. Distinto del caso que `buildPopupHtml` evita explícitamente (interpolar esos mismos campos como HTML VISIBLE sin escapar): aquí el contexto es una URL, y `encodeURIComponent` es la codificación correcta para ese contexto — no se ha bajado la guardia frente a la razón original de no usar `direccion`/`municipio` como HTML crudo.
+- [x] **`rel="noopener noreferrer"` en los tres enlaces sigue intacto** (no tocado por este cambio, ver auditoría original de "Navegación externa" más arriba).
+- [x] **No afecta a la posición de los marcadores en el mapa:** confirmado por lectura de código — `L.marker([estacion.lat, estacion.lng], ...)` no se modificó.
+
+### Veredicto final
+
+**Aprobado para commit.** Ataca la causa real reportada (imprecisión de las coordenadas de origen de MITECO) delegando la localización final en el geocodificador de Google Maps, en vez de confiar en una coordenada de precisión variable. Verificado el formato exacto de la URL contra el especificado, y reevaluada la seguridad al empezar a usar campos de texto libre en ella (`encodeURIComponent` los neutraliza para el contexto de URL). Este cambio SUSTITUYE el diseño de "Navegación externa" auditado más arriba en este documento — esa auditoría anterior (orden de `lat`/`lng` sin invertir) queda como registro histórico de una comprobación que fue válida para el diseño de ENTONCES, ya no aplicable a cómo se construye esta URL en concreto.

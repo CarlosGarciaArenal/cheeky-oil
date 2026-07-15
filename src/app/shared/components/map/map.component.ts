@@ -67,15 +67,28 @@ const FAV_BUTTON_CLASS = 'gas-station-popup__fav-btn';
 const DIRECTIONS_LINK_CLASS = 'gas-station-popup__directions-link';
 
 /**
- * URL universal de Google Maps para trazar ruta hasta unas coordenadas
- * (sin API key, sin coste): en móvil, el propio sistema operativo despierta
- * la app nativa de mapas que el usuario tenga instalada; en escritorio abre
- * Google Maps en el navegador. `lat`/`lng` vienen siempre de `GasStation`/`Favorite`
- * (números ya validados por `MitecoService`/Firestore), nunca de texto libre,
- * así que no requieren el mismo escapado que `escapeHtmlAttribute`.
+ * URL universal de Google Maps para trazar ruta hasta una gasolinera (sin
+ * API key, sin coste): en móvil, el propio sistema operativo despierta la
+ * app nativa de mapas que el usuario tenga instalada; en escritorio abre
+ * Google Maps en el navegador.
+ *
+ * CORRECCIÓN CRÍTICA [ARQUITECTO] (RF-04): enruta por TEXTO (rótulo +
+ * dirección + localidad), no por `lat`/`lng`. Las coordenadas que expone la
+ * API de MITECO no siempre son precisas (geocodificación de origen variable
+ * según la estación) — enviar a Google Maps una `lat,lng` ligeramente
+ * desplazada lleva al usuario a un punto que puede no ser la gasolinera real,
+ * sin ningún indicio de que la ruta está mal. Con una consulta de texto,
+ * Google Maps usa SU PROPIO geocodificador/índice de negocios para localizar
+ * la gasolinera por nombre y dirección, con más probabilidad de acertar el
+ * punto real que confiar en la coordenada bruta de MITECO.
+ *
+ * `encodeURIComponent` neutraliza cualquier carácter con significado HTML
+ * (`<`, `>`, `"`, `&`, etc.) que pudiera venir en `direccion`/`localidad`
+ * (texto libre de MITECO, sin validar — ver `buildPopupHtml`): el resultado
+ * es siempre seguro para interpolarse dentro de un atributo `href`.
  */
-function buildGoogleMapsDirectionsUrl(lat: number, lng: number): string {
-  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localidad: string): string {
+  return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(`${rotulo} ${direccion}, ${localidad}`);
 }
 
 /**
@@ -119,6 +132,8 @@ L.Icon.Default.imagePath = 'assets/leaflet/';
 const STATION_MARKER_COLOR = '#FF512F';
 /** Azul, deliberadamente distinto del naranja de marca: solo hay un marcador de este tipo en el mapa. */
 const USER_MARKER_COLOR = '#2563EB';
+/** Amarillo (RF-04, marcador de gasolinera favorita), deliberadamente distinto tanto del naranja de "gasolinera normal" como del azul de "tu ubicación". */
+const FAVORITE_MARKER_COLOR = '#FFC107';
 
 /**
  * Icono de gasolinera: chincheta (forma "pin") en naranja de marca.
@@ -151,6 +166,26 @@ const USER_ICON = L.divIcon({
   iconSize: [18, 18],
   iconAnchor: [9, 9],
   popupAnchor: [0, -12],
+});
+
+/**
+ * Icono de gasolinera FAVORITA (RF-04): misma chincheta que `STATION_ICON`
+ * (sigue siendo una gasolinera, mismo significado de forma) pero en amarillo
+ * y con una estrella en vez del círculo blanco — dos señales (color Y forma
+ * del glifo interior), no solo el color, mismo criterio de accesibilidad ya
+ * aplicado en `USER_ICON` para diferenciar el marcador de "tu ubicación".
+ */
+const FAVORITE_ICON = L.divIcon({
+  className: 'app-map-icon app-map-icon--favorite',
+  html: `
+    <svg width="26" height="36" viewBox="0 0 26 36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+      <path d="M13 0C5.82 0 0 5.82 0 13c0 9.75 13 23 13 23s13-13.25 13-23C26 5.82 20.18 0 13 0z" fill="${FAVORITE_MARKER_COLOR}"/>
+      <path d="M13 7.5l1.35 3.64 3.88.16-3.04 2.41 1.04 3.74-3.23-2.15-3.23 2.15 1.04-3.74-3.04-2.41 3.88-.16z" fill="#fff"/>
+    </svg>
+  `,
+  iconSize: [26, 36],
+  iconAnchor: [13, 36],
+  popupAnchor: [0, -32],
 });
 
 /**
@@ -209,11 +244,33 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    */
   private estacionesCache: GasStation[] = [];
   private origenCache: Coordinates | null = null;
-  /** Temporizador del fix de `invalidateSize()` (ver `ngAfterViewInit`), para poder cancelarlo en `ngOnDestroy` si el componente se destruye antes de que dispare. */
-  private invalidateSizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Observador del tamaño real del contenedor del mapa (ver `ngAfterViewInit`),
+   * desconectado en `ngOnDestroy`. Sustituye a un `setTimeout` de duración
+   * fija que se usaba antes: un retardo fijo (probado solo contra la carga
+   * INICIAL de esta vista) resultaba insuficiente al volver navegando desde
+   * `/favoritos` — la transición de entrada de Ionic en el camino de vuelta
+   * no dura necesariamente lo mismo que la de la primera carga, así que un
+   * número fijo de ms es una apuesta, no una garantía. `ResizeObserver`
+   * dispara su callback tanto al empezar a observar (con el tamaño que tenga
+   * el contenedor en ESE momento) como cada vez que ese tamaño cambia
+   * después — cubre la carga inicial Y cualquier transición de vuelta, sin
+   * depender de cuánto tarde la animación.
+   */
+  private resizeObserver: ResizeObserver | null = null;
 
   /** `GasStation` por id (IDEESS), reconstruido en cada `redraw()`. Permite que `onFavoriteButtonClick` recupere el objeto completo que exige `FavoritesService.addFavorite(station)` sin guardar una referencia por marcador. */
   private estacionesPorId = new Map<string, GasStation>();
+  /**
+   * `L.Marker` por id (IDEESS), reconstruido en cada `redraw()` igual que
+   * `estacionesPorId`. Permite que `syncMarkerIcons` actualice el icono
+   * (naranja/amarillo) del marcador EXACTO cuyo estado de favorito cambió
+   * con `marker.setIcon(...)` — una operación barata, sin recrear el resto
+   * de marcadores ni sus popups — en vez de disparar un `redraw()` completo
+   * cada vez que el usuario guarda/quita un favorito (mismo criterio ya
+   * aplicado a `syncOpenPopupButton`, ver constructor).
+   */
+  private markersPorId = new Map<string, L.Marker>();
   /** Botón de favorito del ÚNICO popup abierto en cada momento (Leaflet cierra el anterior al abrir uno nuevo, `autoClose` por defecto), y el id que lleva asociado. `null` cuando no hay ningún popup abierto. Se usan para reflejar en el DOM del popup abierto los cambios de `favoriteIds` sin tener que redibujar todos los marcadores (ver justificación en `docs/features/06-favoritos.md`). */
   private openPopupButton: HTMLButtonElement | null = null;
   private openPopupStationId: string | null = null;
@@ -233,10 +290,12 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // popup que el usuario acaba de usar para pulsar el propio botón. Este
     // segundo efecto sí depende de `favoriteIds()` en su cuerpo, pero solo
     // actualiza el botón del popup que esté abierto en ese momento (si hay
-    // uno), sin tocar Leaflet ni el resto de marcadores.
+    // uno) y el icono de los marcadores YA dibujados, sin recrear ninguno ni
+    // tocar el resto de Leaflet (capa, popups, orden).
     effect(() => {
       const ids = this.favoriteIds();
       this.syncOpenPopupButton(ids);
+      this.syncMarkerIcons(ids);
     });
   }
 
@@ -253,15 +312,20 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     }).addTo(this.map);
 
     // Bug clásico de Leaflet: si al crear el mapa el contenedor todavía no
-    // tiene su tamaño final resuelto (transición de entrada de Ionic, layout
-    // asentándose), Leaflet calcula mal las dimensiones y los tiles quedan en
-    // blanco hasta que el usuario redimensiona la ventana. `invalidateSize()`
-    // le fuerza a releer el tamaño real del contenedor y repintar. `this.map`
-    // se comprueba con `?.` porque el componente pudo destruirse (`ngOnDestroy`
-    // pone `this.map = null`) antes de que este timeout llegue a disparar.
-    this.invalidateSizeTimeoutId = setTimeout(() => {
+    // tiene su tamaño final resuelto (transición de entrada/vuelta de Ionic,
+    // layout asentándose), Leaflet calcula mal las dimensiones y los tiles
+    // quedan en blanco/rotos hasta que algo fuerza un recálculo.
+    // `ResizeObserver` dispara su callback con el tamaño real del contenedor
+    // nada más empezar a observar (cubre la carga inicial) y de nuevo cada
+    // vez que ese tamaño cambia después (cubre volver de `/favoritos`, cuya
+    // transición de entrada no dura necesariamente lo mismo que la primera
+    // carga) — sin apostar por un número de ms fijo. `this.map` se comprueba
+    // con `?.` porque el componente pudo destruirse (`ngOnDestroy` pone
+    // `this.map = null` y desconecta este observer) antes de que dispare.
+    this.resizeObserver = new ResizeObserver(() => {
       this.map?.invalidateSize();
-    }, 400);
+    });
+    this.resizeObserver.observe(this.mapContainerRef.nativeElement);
 
     // Controles de zoom reubicados abajo a la izquierda para no tapar
     // la cabecera de marca (arriba) ni futuros controles/FAB en la esquina
@@ -343,13 +407,16 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * listeners internos (drag, zoom, resize) y el DOM del mapa, evitando la
    * fuga de memoria si el usuario navega repetidamente hacia/desde esta vista.
    * `stationsLayer` y sus marcadores se destruyen junto con el mapa: Leaflet
-   * los trata como una capa más, igual que el control de zoom.
+   * los trata como una capa más, igual que el control de zoom. Sin este
+   * `ngOnDestroy`, cada vuelta a `/home` crearía una NUEVA instancia de
+   * `L.Map` sin haber liberado la anterior — no reutilizando el mismo
+   * contenedor (Angular crea un `<div>` nuevo por instancia de componente),
+   * pero sí acumulando listeners/observers huérfanos (`ResizeObserver`,
+   * geolocalización, Firestore) que ya no tienen forma de limpiarse.
    */
   ngOnDestroy(): void {
-    if (this.invalidateSizeTimeoutId !== null) {
-      clearTimeout(this.invalidateSizeTimeoutId);
-      this.invalidateSizeTimeoutId = null;
-    }
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     // `map.remove()` desengancha también los listeners registrados con
     // `map.on(...)` (incluidos `popupopen`/`popupclose`) — no hace falta un
     // `map.off(...)` explícito aparte.
@@ -358,6 +425,7 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.userMarker = null;
     this.stationsLayer = null;
     this.estacionesPorId.clear();
+    this.markersPorId.clear();
     this.openPopupButton = null;
     this.openPopupStationId = null;
   }
@@ -434,50 +502,82 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Limpia los marcadores de una carga (o filtro) anterior antes de dibujar
     // los nuevos (evita acumular marcadores huérfanos).
     this.stationsLayer.clearLayers();
-    // Reconstruido en cada redraw junto con los marcadores: solo necesita
-    // contener las estaciones actualmente dibujadas (las únicas con un
-    // botón de favorito en el DOM que pueda pulsarse).
+    // Reconstruidos en cada redraw junto con los marcadores: solo necesitan
+    // contener las estaciones actualmente dibujadas (las únicas con un botón
+    // de favorito en el DOM que pueda pulsarse / un marcador cuyo icono
+    // `syncMarkerIcons` pueda actualizar).
     this.estacionesPorId.clear();
+    this.markersPorId.clear();
+
+    // Leída UNA vez aquí, envuelta en `untracked()` (RF-04): igual que ya
+    // hacía `buildPopupHtml` antes de este cambio, evita que este efecto
+    // quede también suscrito a `favoriteIds` (ver comentario del
+    // constructor). Se pasa el mismo `Set` ya resuelto tanto al HTML del
+    // popup como a la selección de icono, en vez de leer la signal dos veces.
+    const favoriteIds = untracked(() => this.favoriteIds());
 
     for (const { estacion } of masCercanas) {
       this.estacionesPorId.set(estacion.id, estacion);
 
-      L.marker([estacion.lat, estacion.lng], {
-        icon: STATION_ICON,
+      const marker = L.marker([estacion.lat, estacion.lng], {
+        icon: favoriteIds.has(estacion.id) ? FAVORITE_ICON : STATION_ICON,
         title: `Gasolinera ${estacion.marca} en ${estacion.municipio}`,
       })
-        .bindPopup(this.buildPopupHtml(estacion, fuel), { className: 'gas-station-popup' })
+        .bindPopup(this.buildPopupHtml(estacion, fuel, favoriteIds), { className: 'gas-station-popup' })
         .addTo(this.stationsLayer);
+
+      this.markersPorId.set(estacion.id, marker);
+    }
+  }
+
+  /**
+   * Actualiza el icono (naranja/amarillo) de los marcadores YA dibujados
+   * cuyo estado de favorito cambió, sin disparar un `redraw()` completo —
+   * que recalcularía distancias/orden y recrearía los ~50 popups solo para
+   * cambiar un color. `marker.setIcon(...)` es una operación barata: Leaflet
+   * sustituye el nodo DOM del icono de ESE marcador, no repinta el mapa
+   * entero. Mismo criterio ya aplicado a `syncOpenPopupButton` (ver
+   * constructor y `docs/features/06-favoritos.md`).
+   */
+  private syncMarkerIcons(favoriteIds: Set<string>): void {
+    for (const [stationId, marker] of this.markersPorId) {
+      marker.setIcon(favoriteIds.has(stationId) ? FAVORITE_ICON : STATION_ICON);
     }
   }
 
   /**
    * HTML del popup de cada gasolinera: solo el precio del combustible
-   * seleccionado (nunca los 3). Solo interpola `marca` (tipo cerrado
-   * `GasStationBrand`, generado por `MitecoService`, nunca texto libre de la
-   * API), la etiqueta fija del combustible y un precio numérico — nunca
-   * campos de texto libre de la fuente externa (`direccion`/`municipio`),
-   * para no introducir HTML/JS arbitrario en el mapa vía `bindPopup` (que
-   * interpreta el string como HTML).
+   * seleccionado (nunca los 3). Como texto HTML visible solo interpola
+   * `marca` (tipo cerrado `GasStationBrand`, generado por `MitecoService`,
+   * nunca texto libre de la API), la etiqueta fija del combustible y un
+   * precio numérico — nunca `direccion`/`municipio` (texto libre de la
+   * fuente externa) como HTML sin más, para no introducir HTML/JS arbitrario
+   * en el mapa vía `bindPopup` (que interpreta el string como HTML). Esos dos
+   * campos SÍ se usan, pero solo dentro de `buildDirectionsLinkHtml`, que los
+   * pasa por `encodeURIComponent` antes de interpolarlos (contexto distinto:
+   * un valor de URL, no HTML — ver justificación completa en
+   * `buildGoogleMapsDirectionsUrl`).
    *
-   * `favoriteIds()` se lee dentro de `untracked()` (RF-04): esta función se
-   * invoca desde `redraw()`, que corre dentro del `effect()` cuya ÚNICA
-   * dependencia reactiva debe ser `selectedFuel` (ver comentario del
-   * constructor). Sin `untracked()`, cada alta/baja de favorito volvería a
-   * disparar ese efecto y redibujaría los ~50 marcadores del mapa entero.
+   * `favoriteIds` se recibe ya resuelto (RF-04), no se lee aquí como signal:
+   * esta función se invoca desde `redraw()`, que corre dentro del `effect()`
+   * cuya ÚNICA dependencia reactiva debe ser `selectedFuel` (ver comentario
+   * del constructor) — es `redraw()` quien envuelve la lectura de
+   * `favoriteIds()` en `untracked()` una única vez y se la pasa a esta
+   * función y a la selección de icono del marcador, en vez de que cada una
+   * vuelva a leer la signal por su cuenta.
    */
-  private buildPopupHtml(estacion: GasStation, fuel: FuelKey): string {
+  private buildPopupHtml(estacion: GasStation, fuel: FuelKey, favoriteIds: Set<string>): string {
     const precio = estacion.precios[fuel];
     // Invariante: `redraw()` ya filtró por `precios[fuel] !== null` antes de
     // llegar aquí, pero se mantiene el guard por si esta función se reutiliza
     // alguna vez con una estación sin filtrar previamente.
     const precioTexto = precio !== null ? `${precio.toFixed(3)} €` : 'No disponible';
-    const esFavorito = untracked(() => this.favoriteIds()).has(estacion.id);
+    const esFavorito = favoriteIds.has(estacion.id);
 
     return `
       <strong class="gas-station-popup__marca">${estacion.marca}</strong>
       <p class="gas-station-popup__precio">${FUEL_LABELS[fuel]}: ${precioTexto}</p>
-      ${this.buildDirectionsLinkHtml(estacion.lat, estacion.lng)}
+      ${this.buildDirectionsLinkHtml(estacion.marca, estacion.direccion, estacion.municipio)}
       ${this.buildFavoriteButtonHtml(estacion.id, esFavorito)}
     `;
   }
@@ -489,11 +589,11 @@ export class MapComponent implements AfterViewInit, OnDestroy {
    * cualquier enlace externo). Mismo criterio que `buildFavoriteButtonHtml`:
    * HTML puro, nunca pasa por el compilador de plantillas de Angular.
    */
-  private buildDirectionsLinkHtml(lat: number, lng: number): string {
+  private buildDirectionsLinkHtml(rotulo: string, direccion: string, localidad: string): string {
     return `
       <a
         class="${DIRECTIONS_LINK_CLASS}"
-        href="${buildGoogleMapsDirectionsUrl(lat, lng)}"
+        href="${buildGoogleMapsDirectionsUrl(rotulo, direccion, localidad)}"
         target="_blank"
         rel="noopener noreferrer"
       >📍 Cómo llegar</a>

@@ -40,6 +40,13 @@
       <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
     </ion-select>
 
+    @if (isLoading()) {
+      <p class="favorites-panel__updating" aria-live="polite">
+        <ion-spinner name="dots" aria-hidden="true"></ion-spinner>
+        Actualizando precios...
+      </p>
+    }
+
     @if (loading()) {
       <div class="favorites-panel__state">
         <ion-spinner name="crescent" aria-label="Cargando favoritos..."></ion-spinner>

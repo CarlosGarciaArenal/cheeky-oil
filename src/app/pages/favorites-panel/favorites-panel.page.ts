@@ -14,7 +14,7 @@ import {
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { arrowBackOutline, medalOutline, trashOutline, trendingUpOutline } from 'ionicons/icons';
-import { catchError, combineLatest, map, of, shareReplay, switchMap } from 'rxjs';
+import { catchError, combineLatest, map, of, shareReplay, switchMap, tap } from 'rxjs';
 
 import { FuelType, GasStation } from '../../core/models/gas-station.model';
 import { Favorite, FavoriteWithPrice } from '../../core/models/favorite.model';
@@ -39,14 +39,22 @@ const FUEL_LABELS: Record<FuelType, string> = {
 const DEFAULT_FUEL: FuelType = 'gasolina95';
 
 /**
- * URL universal de Google Maps para trazar ruta hasta unas coordenadas (sin
+ * URL universal de Google Maps para trazar ruta hasta una gasolinera (sin
  * API key, sin coste). Duplicada a propósito respecto a la función homónima
  * de `map.component.ts` (mismo criterio ya aplicado a `FUEL_LABELS` en este
  * mismo archivo): evita acoplar esta página a un componente de UI ajeno por
  * una función de una línea.
+ *
+ * CORRECCIÓN CRÍTICA [ARQUITECTO] (RF-04): enruta por TEXTO (rótulo +
+ * dirección + localidad), no por `lat`/`lng` — las coordenadas de MITECO no
+ * siempre son precisas; ver justificación completa en la función homónima de
+ * `map.component.ts`. `encodeURIComponent` neutraliza cualquier carácter con
+ * significado HTML que pudiera venir en `direccion`/`municipio` (texto libre
+ * de MITECO/Firestore, sin validar), dejando el resultado seguro para un
+ * atributo `[href]`.
  */
-function buildGoogleMapsDirectionsUrl(lat: number, lng: number): string {
-  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localidad: string): string {
+  return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(`${rotulo} ${direccion}, ${localidad}`);
 }
 
 /**
@@ -81,6 +89,16 @@ export class FavoritesPanelPage {
   protected readonly selectedFuel = signal<FuelType>(DEFAULT_FUEL);
 
   protected readonly loading = signal(true);
+  /**
+   * `true` mientras se está recalculando el precio para el combustible
+   * recién seleccionado (una descarga completa de MITECO, ver comentario de
+   * `estacionesPorFuel$` más abajo). Distinto de `loading`: `loading` solo
+   * cubre la carga INICIAL de la lista de favoritos (Firestore, rápida);
+   * `isLoading` cubre cualquier cambio de combustible posterior, para que la
+   * plantilla pueda avisar de que el precio mostrado se está actualizando en
+   * vez de dejar visible el precio del combustible anterior.
+   */
+  protected readonly isLoading = signal(false);
   protected readonly errorMessage = signal<string | null>(null);
   /** Lista "rápida": solo Firestore (`getFavorites()`), SIN precio. Es la única fuente de la que depende `loading`/el estado vacío. */
   protected readonly favoritos = signal<Favorite[]>([]);
@@ -153,6 +171,18 @@ export class FavoritesPanelPage {
     // más arriba). Así, solo cambiar de combustible pide MITECO de nuevo;
     // añadir/quitar un favorito reutiliza la última respuesta ya descargada.
     const estacionesPorFuel$ = toObservable(this.selectedFuel).pipe(
+      // `tap` ANTES del `switchMap`: se ejecuta de inmediato al cambiar de
+      // combustible, no cuando responde MITECO. Pone `isLoading` a `true` y
+      // `preciosPorId` a `null` (mismo "aún no ha llegado nada" que el
+      // estado inicial, ver su documentación) para que la plantilla deje de
+      // mostrar el precio del combustible ANTERIOR mientras llega el nuevo —
+      // sin esto, `preciosPorId` conservaba su último valor durante toda la
+      // descarga de MITECO (~11.500 estaciones, 3-4 s), mostrando un precio
+      // que ya no corresponde al combustible seleccionado.
+      tap(() => {
+        this.isLoading.set(true);
+        this.preciosPorId.set(null);
+      }),
       switchMap((fuel) =>
         this.mitecoService.getEstaciones().pipe(
           map((estaciones) => ({ fuel, estaciones })),
@@ -176,9 +206,14 @@ export class FavoritesPanelPage {
     // ser un `combineLatest` PLANO (sin `switchMap` envolviéndolo), una
     // emisión de cualquiera de los dos simplemente recombina con el último
     // valor conocido del otro — nunca vuelve a pedir nada por sí solo. A
-    // propósito NO toca `loading`: es una mejora progresiva sobre la lista ya
-    // visible (cada tarjeta muestra su propio "Cargando precio…" mientras
-    // tanto, ver plantilla), nunca bloquea la aparición de la lista en sí.
+    // propósito NO toca `loading` (la carga INICIAL de la lista, ver su
+    // documentación): es una mejora progresiva sobre la lista ya visible,
+    // nunca bloquea la aparición de la lista en sí. Sí pone `isLoading` a
+    // `false` aquí, en el único punto en que se conoce el precio ya
+    // actualizado para el combustible vigente — sea el cruce recién resuelto
+    // (éxito) o el `catchError` de `estacionesPorFuel$` (fallo ya gestionado,
+    // con `estaciones: []`): ambos casos llegan hasta aquí y dejan de estar
+    // "cargando".
     combineLatest([favoritos$, estacionesPorFuel$])
       .pipe(
         map(([favoritos, { fuel, estaciones }]) => this.favoritesService.mergeWithPrices(favoritos, estaciones, fuel)),
@@ -186,12 +221,13 @@ export class FavoritesPanelPage {
       )
       .subscribe((favoritosConPrecio) => {
         this.preciosPorId.set(new Map(favoritosConPrecio.map((favorito) => [favorito.id, favorito])));
+        this.isLoading.set(false);
       });
   }
 
   /** Usado desde la plantilla para el `[href]` del enlace "📍 Cómo llegar" de cada tarjeta. */
   protected directionsUrl(favorito: Favorite): string {
-    return buildGoogleMapsDirectionsUrl(favorito.lat, favorito.lng);
+    return buildGoogleMapsDirectionsUrl(favorito.marca, favorito.direccion, favorito.municipio);
   }
 
   protected onFuelChange(event: SelectCustomEvent): void {
