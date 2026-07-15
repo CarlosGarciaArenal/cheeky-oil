@@ -1,17 +1,32 @@
 <div #mapContainer class="map" role="application" aria-label="Mapa de gasolineras cercanas"></div>
 
-<ion-select
-  class="map__fuel-filter"
-  fill="solid"
-  interface="popover"
-  [value]="selectedFuel()"
-  (ionChange)="onFuelChange($event)"
-  aria-label="Filtrar gasolineras por tipo de combustible"
->
-  <ion-select-option value="gasolina95">{{ fuelLabels.gasolina95 }}</ion-select-option>
-  <ion-select-option value="gasolina98">{{ fuelLabels.gasolina98 }}</ion-select-option>
-  <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
-</ion-select>
+<div class="map__filters">
+  <ion-select
+    class="map__fuel-filter"
+    fill="solid"
+    interface="popover"
+    [value]="selectedFuel()"
+    (ionChange)="onFuelChange($event)"
+    aria-label="Filtrar gasolineras por tipo de combustible"
+  >
+    <ion-select-option value="gasolina95">{{ fuelLabels.gasolina95 }}</ion-select-option>
+    <ion-select-option value="gasolina98">{{ fuelLabels.gasolina98 }}</ion-select-option>
+    <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
+  </ion-select>
+
+  <ion-select
+    class="map__distance-filter"
+    fill="solid"
+    interface="popover"
+    [value]="maxDistanceKm()"
+    (ionChange)="onDistanceChange($event)"
+    aria-label="Filtrar gasolineras por radio máximo de distancia"
+  >
+    @for (option of distanceOptions; track option.value) {
+      <ion-select-option [value]="option.value">{{ option.label }}</ion-select-option>
+    }
+  </ion-select>
+</div>
 
 @if (locationError() || stationsError()) {
   <div class="map__errors">

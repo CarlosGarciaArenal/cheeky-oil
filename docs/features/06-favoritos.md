@@ -848,3 +848,61 @@ function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localid
 ### Veredicto final
 
 **Aprobado para commit.** Ataca la causa real reportada (imprecisión de las coordenadas de origen de MITECO) delegando la localización final en el geocodificador de Google Maps, en vez de confiar en una coordenada de precisión variable. Verificado el formato exacto de la URL contra el especificado, y reevaluada la seguridad al empezar a usar campos de texto libre en ella (`encodeURIComponent` los neutraliza para el contexto de URL). Este cambio SUSTITUYE el diseño de "Navegación externa" auditado más arriba en este documento — esa auditoría anterior (orden de `lat`/`lng` sin invertir) queda como registro histórico de una comprobación que fue válida para el diseño de ENTONCES, ya no aplicable a cómo se construye esta URL en concreto.
+
+---
+
+## Revisión solicitada de `removeFavorite`: eliminación física confirmada, sin bug encontrado
+
+**Rol:** [ARQUITECTO]
+**Motivo:** encargo explícito de revisar `removeFavorite` para confirmar que usa `deleteDoc` del SDK modular y que las consultas a `favorites` no devuelven un documento ya eliminado.
+**Archivo revisado (sin cambios):**
+- `src/app/core/services/favorites.service.ts`
+
+### Qué se comprobó
+
+```ts
+async removeFavorite(stationId: string): Promise<void> {
+  const uid = this.requireUid();
+  const favoriteRef = doc(this.firestore, this.favoritesCollectionPath(uid), stationId);
+  await deleteDoc(favoriteRef);
+}
+```
+
+1. **`deleteDoc` es, en efecto, el `deleteDoc` del SDK modular de Firestore**, importado directamente de `@angular/fire/firestore` (línea 6 de este archivo) — no una implementación propia ni un "borrado lógico" con un campo `activo`/`eliminado`. `Favorite` (`favorite.model.ts`) no tiene ningún campo de ese tipo: el modelo no contempla en absoluto un estado "borrado pero presente".
+2. **`favoriteRef` apunta exactamente al documento a eliminar**: `doc(firestore, 'users/{uid}/favorites', stationId)` — el mismo path e id que usa `addFavorite` para crearlo (`GasStation.id`/IDEESS como id de documento, ver Justificación de Diseño, punto 2). `deleteDoc` sobre esa referencia borra ESE documento físicamente de Firestore, no lo oculta ni lo marca.
+3. **Las consultas a `favorites` no pueden devolver un documento ya eliminado, por construcción de Firestore, no por lógica adicional de la app.** `getFavorites()` (única forma en que la app lee esta colección) usa `collectionData(favoritesRef)` — un listener en tiempo real (`onSnapshot`) sobre la colección completa. Tras un `deleteDoc` confirmado por el servidor, Firestore emite automáticamente una nueva `QuerySnapshot` que ya no incluye ese documento; no hay ninguna ruta de lectura alternativa (ni caché local, ni una consulta "one-shot" aparte) que pudiera seguir devolviéndolo. Esto ya se había confirmado y verificado en la auditoría [REVIEWER] original de este documento (sección "Auditoría [REVIEWER]", punto 1) y no ha cambiado desde entonces.
+4. **La subcolección de histórico (`.../favorites/{id}/history`, `[[07-monitorizacion-historica]]`) queda huérfana tras el borrado — confirmado, y aceptado explícitamente por el encargo** ("sabemos que si hay subcolecciones quedará huérfano"). Firestore no borra en cascada: un `deleteDoc` sobre el documento padre no toca sus subcolecciones. No se ha añadido lógica para limpiarlas en este ciclo, tal como se pidió; queda anotado como pendiente futuro (ver abajo), no como parte de este encargo.
+
+### Veredicto
+
+**Sin bug encontrado — ningún cambio de código necesario.** `removeFavorite` ya usaba `deleteDoc` del SDK modular sobre la referencia correcta antes de este ciclo, y `getFavorites()` (la única vía de lectura de esta colección en toda la app) es un listener en tiempo real que refleja la eliminación automáticamente. Se prefiere documentar esta confirmación en vez de introducir un cambio no necesario en código que ya era correcto (evita el riesgo de una regresión al "arreglar" algo que no estaba roto).
+
+### Pendiente explícito (no bloqueante, no parte de este encargo)
+
+- **Limpieza de la subcolección `history` huérfana al eliminar un favorito** (borrar sus documentos de histórico, ej. con un `writeBatch`/`getDocs` + `deleteDoc` en bucle, o aceptar el coste de que queden huérfanos si el usuario vuelve a guardar la misma gasolinera más adelante — el histórico previo reaparecería). El encargo de este ciclo pidió explícitamente NO ocuparse de esto todavía; queda anotado para que un futuro ciclo de `[[ARQUITECTO]]` decida si merece la pena frente al coste (bajo, dado el límite de 10 favoritos) de dejarlas huérfanas.
+
+---
+
+## Auditoría [REVIEWER]: ¿`removeFavorite` ejecuta correctamente la promesa de borrado?
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/core/services/favorites.service.ts` (`removeFavorite`)
+- `src/app/shared/components/map/map.component.ts` (`onFavoriteButtonClick`, único consumidor desde el mapa)
+- `src/app/pages/favorites-panel/favorites-panel.page.ts` (`onRemove`, único consumidor desde el panel)
+
+No se da por buena la confirmación ya escrita por `[ARQUITECTO]` en la sección anterior sin verificarla de nuevo — se releyó el código y se repitió la comprobación de forma empírica end-to-end (no solo lectura), con una cuenta de Firebase de prueba real.
+
+- [x] **`removeFavorite` es `async` y hace `await deleteDoc(favoriteRef)` (línea 106)** — no dispara `deleteDoc(...)` sin esperar su resultado (`fire-and-forget` accidental). Si `deleteDoc` rechaza (ej. red caída, permisos), ese rechazo se propaga como el rechazo de la propia promesa que devuelve `removeFavorite`, no se pierde ni queda como una excepción no capturada (`unhandled rejection`).
+- [x] **Ambos consumidores reales de `removeFavorite` gestionan esa promesa correctamente:**
+  - `FavoritesPanelPage.onRemove` (`favorites-panel.page.ts`): `await this.favoritesService.removeFavorite(favorito.id)` dentro de un `try/catch`, con `errorMessage.set(...)` en el `catch` y `removingId.set(null)` en el `finally` — un fallo real se refleja en la UI, nunca queda silencioso.
+  - `MapComponent.onFavoriteButtonClick` (`map.component.ts`): la promesa (`removeFavorite`/`addFavorite` según el caso) se encadena con `.catch(...)` + `.finally(...)` — mismo patrón, ningún camino deja la promesa sin gestionar.
+- [x] **Verificación empírica end-to-end (Playwright + cuenta de prueba real, creada y eliminada con la API REST), repitiendo el ciclo completo guardar → comprobar → quitar → comprobar:**
+  1. Se guardó una gasolinera como favorita desde el popup del mapa. Lectura directa a la API REST de Firestore (con el `idToken` real de la cuenta de prueba): **1 documento** en `users/{uid}/favorites`.
+  2. Se pulsó "Quitar ⭐" en el mismo popup. Lectura directa a la API REST de Firestore inmediatamente después: **0 documentos** — confirma que `deleteDoc` se ejecutó y se COMPLETÓ de verdad contra el servidor real (no una simple actualización optimista local que pudiera revertirse), ya que la lectura es una petición HTTP independiente contra la API REST, no el propio SDK cliente de la app.
+  3. Navegando a `/favoritos` tras el borrado: el panel muestra correctamente el estado vacío ("Aún no has guardado ninguna gasolinera favorita..."), confirmando que el listener en vivo de `getFavorites()` también refleja la eliminación en la UI, no solo en el backend.
+  4. **Cero errores de consola** durante todo el ciclo guardar/quitar.
+
+### Veredicto final
+
+**Aprobado para commit — confirmado, no solo por lectura de código sino de forma empírica end-to-end.** `removeFavorite` ejecuta y espera correctamente la promesa de `deleteDoc`; sus dos consumidores (mapa y panel de favoritos) gestionan esa promesa sin dejar ningún camino sin capturar; y se confirmó con una cuenta de Firebase real que el documento desaparece físicamente de Firestore (leído vía API REST independiente del propio cliente) y que la UI refleja el estado vacío correctamente después.

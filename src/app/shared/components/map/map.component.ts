@@ -12,7 +12,7 @@ import {
   untracked,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { IonSelect, IonSelectOption, SelectCustomEvent } from '@ionic/angular/standalone';
+import { IonSelect, IonSelectOption, SelectCustomEvent, ToastController } from '@ionic/angular/standalone';
 import * as L from 'leaflet';
 
 import { FuelPrices, GasStation } from '../../../core/models/gas-station.model';
@@ -59,6 +59,32 @@ const FUEL_LABELS: Record<FuelKey, string> = {
   gasolina98: 'Gasolina 98',
   diesel: 'Diésel',
 };
+
+/** Una opción del selector de radio máximo (`ion-select-option`, ver la plantilla). */
+interface DistanceOption {
+  value: number;
+  label: string;
+}
+
+/**
+ * Radios predefinidos del selector de distancia. `Infinity` ("Sin límite") es
+ * un valor real, no un sentinela numérico (`-1`, `0`...): `maxDistanceKm`
+ * (signal leída por `redraw()`) ya trata `Infinity` como "sin filtro" de
+ * forma explícita, así que esta opción no necesita ninguna traducción especial
+ * entre lo que el usuario elige y lo que `redraw()` interpreta.
+ */
+const DISTANCE_OPTIONS: DistanceOption[] = [
+  { value: 5, label: '5 km' },
+  { value: 10, label: '10 km' },
+  { value: 15, label: '15 km' },
+  { value: 25, label: '25 km' },
+  { value: 50, label: '50 km' },
+  { value: 100, label: '100 km' },
+  { value: Infinity, label: 'Sin límite' },
+];
+
+/** Radio por defecto al cargar el mapa: suficientemente amplio para casi cualquier zona sin llegar a "sin límite". */
+const DEFAULT_MAX_DISTANCE_KM = 25;
 
 /** Clase CSS del botón de favorito dentro del popup (ver `global.scss`), usada tanto al construir el HTML como al localizar el botón vía `querySelector` en `onPopupOpen`. */
 const FAV_BUTTON_CLASS = 'gas-station-popup__fav-btn';
@@ -210,10 +236,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /** Combustible seleccionado en el `ion-select` (RF-03). Por defecto, Gasolina 95. */
   protected readonly selectedFuel = signal<FuelKey>('gasolina95');
   protected readonly fuelLabels = FUEL_LABELS;
+  /**
+   * Radio máximo (en km) desde el usuario para considerar una gasolinera,
+   * elegido en el `ion-select` de radio (ver plantilla). `DEFAULT_MAX_DISTANCE_KM`
+   * (25 km) por defecto, no `Infinity`: un radio amplio mantiene el
+   * comportamiento útil de "gasolineras cerca de mí" desde la primera carga,
+   * sin mostrar de entrada estaciones a cientos de km si el usuario está en
+   * una zona con pocas gasolineras dentro de las `MAX_ESTACIONES_EN_MAPA` más
+   * cercanas. Mutarla (`.set(...)`) re-dispara `redraw()` solo por ser leída
+   * dentro del mismo `effect()` que ya depende de `selectedFuel` — ver
+   * comentario de `redraw()`.
+   */
+  protected readonly maxDistanceKm = signal<number>(DEFAULT_MAX_DISTANCE_KM);
+  protected readonly distanceOptions = DISTANCE_OPTIONS;
 
   private readonly locationService = inject(LocationService);
   private readonly mitecoService = inject(MitecoService);
   private readonly favoritesService = inject(FavoritesService);
+  private readonly toastController = inject(ToastController);
   private readonly destroyRef = inject(DestroyRef);
 
   /**
@@ -430,11 +470,27 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     this.openPopupStationId = null;
   }
 
-  /** Handler del `(ionChange)` del `ion-select`: solo actualiza la signal; `redraw()` se dispara solo vía el `effect` del constructor. */
+  /** Handler del `(ionChange)` del `ion-select` de combustible: solo actualiza la signal; `redraw()` se dispara solo vía el `effect` del constructor. */
   protected onFuelChange(event: SelectCustomEvent): void {
     const value = event.detail.value;
     if (value === 'gasolina95' || value === 'gasolina98' || value === 'diesel') {
       this.selectedFuel.set(value);
+    }
+  }
+
+  /**
+   * Handler del `(ionChange)` del `ion-select` de radio: mismo patrón que
+   * `onFuelChange` — solo actualiza `maxDistanceKm`, nunca llama a `redraw()`
+   * a mano. `event.detail.value` conserva el valor real bindado en
+   * `[value]="option.value"` (incluido `Infinity`, un número de verdad, no
+   * una cadena `"Infinity"` que hubiera que parsear), así que un simple
+   * `typeof value === 'number'` basta para aceptar cualquier opción de
+   * `DISTANCE_OPTIONS` sin necesitar una lista de valores válidos aparte.
+   */
+  protected onDistanceChange(event: SelectCustomEvent): void {
+    const value = event.detail.value;
+    if (typeof value === 'number') {
+      this.maxDistanceKm.set(value);
     }
   }
 
@@ -468,25 +524,28 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
   /**
    * Filtra por el combustible seleccionado, calcula la distancia de TODAS
-   * las estaciones filtradas, ordena de menor a mayor distancia y SOLO
-   * DESPUÉS recorta a `MAX_ESTACIONES_EN_MAPA`. El orden importa: si se
-   * recortara antes de filtrar (o se filtrara solo dentro de un recorte ya
-   * hecho por distancia global), las 50 más cercanas "reales" que sí tienen
-   * el combustible elegido podrían quedar fuera en favor de estaciones más
-   * cercanas mundialmente pero sin ese combustible, o de estaciones ya
-   * descartadas del recorte inicial (ver `docs/features/04-filtros-combustible.md`).
+   * las estaciones filtradas, ordena de menor a mayor distancia, filtra por
+   * `maxDistanceKm` y SOLO DESPUÉS recorta a `MAX_ESTACIONES_EN_MAPA`. El
+   * orden importa: si se recortara antes de filtrar (por combustible o por
+   * distancia), las estaciones "reales" que sí cumplen ambos criterios
+   * podrían quedar fuera en favor de estaciones más cercanas mundialmente
+   * pero sin ese combustible, o ya descartadas por un recorte previo (ver
+   * `docs/features/04-filtros-combustible.md`, mismo razonamiento ya
+   * aplicado ahí al filtro de combustible).
    */
   private redraw(): void {
-    // `fuel` se lee SIEMPRE en la primera línea, antes de cualquier `return`
-    // anticipado. Un `effect()` solo registra como dependencia los signals
-    // que efectivamente se leen durante una ejecución dada: si el primer
-    // disparo del efecto (justo tras construirse el componente, con
-    // `origenCache` aún `null`) hubiera cortado en el guard de abajo sin
-    // llegar a leer `selectedFuel()`, Angular no habría registrado ninguna
-    // dependencia — y el efecto jamás se habría vuelto a ejecutar al
-    // cambiar de combustible después (el bug real reportado: el mapa se
-    // quedaba siempre con el combustible por defecto).
+    // `fuel`/`maxDistanceKm` se leen SIEMPRE en las primeras líneas, antes de
+    // cualquier `return` anticipado. Un `effect()` solo registra como
+    // dependencia los signals que efectivamente se leen durante una
+    // ejecución dada: si el primer disparo del efecto (justo tras
+    // construirse el componente, con `origenCache` aún `null`) hubiera
+    // cortado en el guard de abajo sin llegar a leerlas, Angular no habría
+    // registrado ninguna dependencia — y el efecto jamás se habría vuelto a
+    // ejecutar al cambiar de combustible o de radio después (el bug real ya
+    // reportado para `selectedFuel`: el mapa se quedaba siempre con el
+    // combustible por defecto).
     const fuel = this.selectedFuel();
+    const maxDistanceKm = this.maxDistanceKm();
     const origen = this.origenCache;
     if (!this.map || !this.stationsLayer || !origen) {
       return;
@@ -497,7 +556,24 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     const masCercanas = conCombustible
       .map((estacion) => ({ estacion, distanciaKm: haversineDistanceKm(origen, estacion) }))
       .sort((a, b) => a.distanciaKm - b.distanciaKm)
+      // `maxDistanceKm === Infinity` omite el filtro explícitamente (en vez
+      // de confiar solo en que `distanciaKm <= Infinity` sea siempre cierto):
+      // dos gasolineras a la MISMA distancia justo en el límite quedan
+      // incluidas por igual (`<=`, no `<`), y el caso "sin límite" queda
+      // documentado en el propio código, no solo como efecto colateral de
+      // comparar contra `Infinity`.
+      .filter((item) => maxDistanceKm === Infinity || item.distanciaKm <= maxDistanceKm)
       .slice(0, MAX_ESTACIONES_EN_MAPA);
+
+    // Aviso no bloqueante si el combustible + radio elegidos no dejan NINGUNA
+    // gasolinera que dibujar. `this.estacionesCache.length > 0` descarta el
+    // caso "MITECO todavía no ha respondido" (el usuario cambió de radio
+    // antes de que `loadNearestStations` resolviera, con `estacionesCache`
+    // aún en su `[]` inicial) — sin este guard se mostraría un "no hay
+    // gasolineras" falso mientras la carga real sigue en curso.
+    if (masCercanas.length === 0 && this.estacionesCache.length > 0) {
+      void this.presentEmptyResultsToast();
+    }
 
     // Limpia los marcadores de una carga (o filtro) anterior antes de dibujar
     // los nuevos (evita acumular marcadores huérfanos).
@@ -528,6 +604,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
 
       this.markersPorId.set(estacion.id, marker);
     }
+  }
+
+  /**
+   * Aviso amigable (no bloqueante) cuando el combustible + radio elegidos no
+   * dejan ninguna gasolinera en el mapa. `ToastController` (imperativo, igual
+   * que `ModalController` ya usado en `favorites-panel.page.ts`), no un
+   * `<ion-toast>` declarativo en la plantilla: este aviso es un efecto
+   * secundario de `redraw()` (que corre dentro de un `effect()`, sin acceso
+   * cómodo a un `isOpen` reactivo enlazado a plantilla), no un estado que
+   * la UI deba reflejar de forma persistente.
+   */
+  private async presentEmptyResultsToast(): Promise<void> {
+    const toast = await this.toastController.create({
+      message: 'No se ha encontrado ninguna gasolinera con ese combustible dentro de ese radio.',
+      duration: 3000,
+      position: 'bottom',
+      color: 'medium',
+      buttons: [{ text: 'OK', role: 'cancel' }],
+    });
+    await toast.present();
   }
 
   /**

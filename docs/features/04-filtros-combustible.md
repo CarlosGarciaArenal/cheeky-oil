@@ -311,3 +311,174 @@ Se repite la misma auditoría del ciclo anterior íntegramente contra el código
 ### Veredicto final
 
 **Aprobado para commit.** Los marcadores se siguen limpiando correctamente antes de cada redibujado, la ordenación por distancia sigue siendo correcta (sin cambios respecto a la verificación empírica previa), el bug de reactividad reportado tiene una causa raíz identificada y corregida de forma coherente, y el `console.log` de diagnóstico se ha retirado.
+
+---
+
+## Filtro de radio máximo (`maxDistanceKm`)
+
+**Rol:** [ARQUITECTO]
+**Estado:** Implementado (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.ts`
+
+### Qué hace
+
+Añade una signal `maxDistanceKm` (por defecto `Infinity`, sin límite — mismo comportamiento que antes de este cambio) que `redraw()` aplica como un filtro más, **después de ordenar por distancia y antes de recortar a `MAX_ESTACIONES_EN_MAPA`**: ninguna gasolinera a más de `maxDistanceKm` del usuario puede llegar a dibujarse, sin importar si hay hueco en las 50 del recorte.
+
+### Cambio en el pipeline de `redraw()`
+
+```ts
+const masCercanas = conCombustible
+  .map((estacion) => ({ estacion, distanciaKm: haversineDistanceKm(origen, estacion) }))
+  .sort((a, b) => a.distanciaKm - b.distanciaKm)
+  .filter((item) => maxDistanceKm === Infinity || item.distanciaKm <= maxDistanceKm)
+  .slice(0, MAX_ESTACIONES_EN_MAPA);
+```
+
+### Justificación de Diseño (ARQUITECTO)
+
+1. **El filtro de distancia se inserta ENTRE `sort` y `slice`, nunca antes del `sort` ni sustituyendo al `slice`.** Mismo razonamiento ya establecido para el filtro de combustible en este documento ("Corrección Crítica: orden filtrar → distancia → ordenar → recortar"): recortar a 50 antes de aplicar el radio podría descartar estaciones que sí caben dentro de `maxDistanceKm` en favor de otras más lejanas que ya ocupaban un hueco del recorte, si el recorte ocurriera en el orden equivocado. Ordenar primero y filtrar por radio después garantiza que las que sobreviven al filtro siguen viniendo ya ordenadas de más cercana a más lejana, y `slice` sigue siendo la última operación.
+2. **`maxDistanceKm` es una signal (`Infinity` por defecto), no un parámetro del método `redraw()`.** `redraw()` ya se invoca desde dos sitios sin argumentos (el `effect()` del constructor y `loadNearestStations`) — convertirlo en parámetro habría obligado a que ambos lo pasaran explícitamente, rompiendo el patrón ya establecido de "el `effect` reacciona solo a signals que `redraw()` lee por su cuenta". Con una signal, mutar `maxDistanceKm.set(...)` desde un futuro control de UI-DEV re-dispara `redraw()` automáticamente a través del MISMO `effect(() => this.redraw())` que ya reacciona a `selectedFuel` — sin tocar ni el constructor ni las firmas de `redraw()`/`loadNearestStations`.
+3. **Se lee `this.maxDistanceKm()` en la misma línea inicial que `this.selectedFuel()`, antes de cualquier `return` anticipado.** Mismo invariante ya documentado (y ya causante de un bug real corregido en este documento, sección "Corrección de Usabilidad y Bug Crítico de Reactividad"): un `effect()` de Angular solo registra como dependencia los signals leídos durante una ejecución dada. Si `maxDistanceKm()` se leyera después del guard `if (!this.map || !this.stationsLayer || !origen) return;`, la primera ejecución del efecto (con `origenCache` aún `null`) no la registraría como dependencia, y cambiarla después nunca volvería a disparar `redraw()` — exactamente el mismo bug ya sufrido con `selectedFuel`, evitado aquí desde el principio en vez de tener que corregirlo en un ciclo posterior.
+4. **`maxDistanceKm === Infinity` se comprueba explícitamente en el `filter`, en vez de confiar solo en que `distanciaKm <= Infinity` sea matemáticamente siempre cierto.** Ambas formas producen el mismo resultado (cualquier distancia finita es `<= Infinity`), pero la comprobación explícita dice en el propio código, sin ambigüedad, que "sin límite" es un caso soportado a propósito — no un efecto colateral de comparar contra un valor especial que alguien podría "corregir" sin darse cuenta en un cambio futuro (ej. sustituyendo `Infinity` por `Number.MAX_SAFE_INTEGER` rompería la comparación matemática pero no el `===` explícito... si se comprobara igual; documentado aquí para que quien toque este código en el futuro entienda por qué ambas líneas de defensa conviven).
+5. **`Infinity` como valor "sin límite", no `null`/`undefined`.** `maxDistanceKm` es un `number`, no `number | null` — evita que cada consumidor de la signal tenga que comprobar dos casos ("sin valor" vs. "0 o negativo") para expresar "sin límite". `Infinity` participa además correctamente en comparaciones aritméticas (`distanciaKm <= Infinity`) sin necesitar una rama especial en ningún otro sitio que llegue a usar el valor numérico directamente.
+
+### Verificación empírica (no solo lectura de código)
+
+Se ejecutó el pipeline completo (`filter` combustible → `map` distancia → `sort` → `filter` radio → `slice`) en Node contra una descarga real de la API (11.523 estaciones), origen = Madrid centro, combustible Gasolina 95:
+
+| `maxDistanceKm` | Dibujadas | Distancia máxima real | Estaciones fuera de rango coladas |
+|---|---|---|---|
+| 1 | 0 | N/A | 0 |
+| 3 | 23 | 2.998 km | 0 |
+| 5 | 50 | 4.513 km | 0 |
+| 10 | 50 | 4.513 km | 0 |
+| `Infinity` | 50 | 4.513 km | 0 |
+
+Confirma tres cosas a la vez: (a) **ninguna estación fuera del radio pedido se cuela** en ningún caso (columna "coladas" siempre 0); (b) con un radio más generoso que la distancia a la que ya se alcanzan las 50 estaciones (5 km, 10 km, `Infinity`), el resultado es idéntico — el radio deja de ser el factor limitante y manda `MAX_ESTACIONES_EN_MAPA`, como debe ser; (c) `Infinity` se comporta exactamente igual que los radios ya lo bastante grandes como para no filtrar nada, confirmando que "omitir el filtro" y "un radio que no llega a filtrar nada" son observacionalmente el mismo resultado, tal como exige el diseño.
+
+### Seguridad y Costes
+
+- Sin llamadas nuevas a Firestore/Cloud Functions ni a la API de MITECO: el filtro opera enteramente sobre `estacionesCache` ya descargado, igual que el filtro de combustible ya documentado en este archivo.
+- Cambiar `maxDistanceKm` reutiliza el mismo `effect()` ya existente — no se registra ningún listener/suscripción adicional.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[UI-DEV]:** control de UI... que llame a `this.maxDistanceKm.set(...)`.~~ **Hecho, ver sección [UI-DEV] más abajo.**
+- **[REVIEWER]:** confirmar que la posición del filtro (entre `sort` y `slice`) y la lectura temprana de la signal (antes del guard) están libres del mismo bug de reactividad ya corregido una vez en este documento para `selectedFuel`.
+
+---
+
+## UI del filtro de radio (`ion-select` + Toast de "sin resultados")
+
+**Rol:** [UI-DEV]
+**Estado:** Implementado (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivos modificados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/shared/components/map/map.component.html`
+- `src/app/shared/components/map/map.component.scss`
+
+### Qué hace
+
+Un segundo `ion-select`, apilado debajo del selector de combustible (mismo estilo, misma esquina), permite elegir el radio máximo de búsqueda: **5, 10, 15, 25, 50, 100 km o "Sin límite"** — por defecto **25 km**. Cambiar de radio recalcula y redibuja el mapa usando el `maxDistanceKm` ya implementado por `[[ARQUITECTO]]`. Si el combustible + radio elegidos no dejan ninguna gasolinera, aparece un Toast amigable y no bloqueante avisando de ello.
+
+### Diagrama de Flujo (Mermaid): del selector de radio al Toast
+
+```mermaid
+flowchart TD
+    A["Usuario abre el ion-select de radio"] --> B["Elige una opción (ej. '10 km')"]
+    B --> C["(ionChange) → onDistanceChange(event)"]
+    C --> D["maxDistanceKm.set(valor)\n(Infinity si eligió 'Sin límite')"]
+    D -.->|"signal cambia"| E["effect() del constructor se re-ejecuta\n(MISMO effect que ya reacciona a selectedFuel)"]
+    E --> F["redraw()"]
+
+    F --> G["fuel/maxDistanceKm leídos en las 2 primeras líneas\n(antes de cualquier guard, ver justificación ARQUITECTO)"]
+    G --> H["filter combustible → map distancia → sort → filter radio → slice(0,50)"]
+    H --> I{"masCercanas.length === 0\nY estacionesCache.length > 0?"}
+    I -->|"sí"| J["presentEmptyResultsToast()\nToastController.create(...).present()"]
+    I -->|"no"| K["stationsLayer.clearLayers() + dibuja marcadores"]
+    J --> K
+```
+
+### Justificación de Diseño (UI-DEV)
+
+1. **`ion-select` (no `ion-range`), mismo componente que el filtro de combustible.** El enunciado permitía ambas opciones; `ion-select` con 7 valores discretos y predefinidos encaja mejor con "radios recomendados" (5/10/15/25/50/100 km + Sin límite) que un `ion-range` continuo, que sugeriría al usuario poder elegir cualquier valor intermedio (ej. 37 km) sin que eso aporte nada real — y mantiene coherencia visual/de interacción con el selector ya existente (mismo `fill="solid"`, mismo `interface="popover"`, mismo criterio de accesibilidad ya justificado para `selectedFuel`).
+2. **`Infinity` como valor real bindado (`[value]="option.value"`), no una opción especial gestionada aparte.** `ion-select-option` acepta cualquier valor de JavaScript vía *property binding* de Angular (no solo strings de un atributo HTML plano) — `Infinity` viaja intacto desde la opción hasta `event.detail.value`, y `onDistanceChange` solo necesita comprobar `typeof value === 'number'` para aceptar las 7 opciones por igual, sin una rama especial para "Sin límite" ni tener que parsear una cadena `"Infinity"`.
+3. **`@for` sobre `DISTANCE_OPTIONS`, no 7 `<ion-select-option>` escritos a mano** (a diferencia del selector de combustible, que solo tiene 3 y sí están escritos literalmente). Con más opciones, un array iterado evita repetir la misma estructura 7 veces y centraliza las etiquetas/valores en un único sitio (`map.component.ts`) fácil de ajustar si en el futuro cambian los radios recomendados.
+4. **Contenedor `.map__filters` nuevo, envolviendo ambos `ion-select` en columna (`flex-direction: column; gap: 8px`), en vez de calcular un `top` distinto para el segundo selector.** Con un único filtro, el offset de cabecera (`env(safe-area-inset-top) + 56px + 8px`) solo se calculaba una vez; añadir un segundo control con su propio `top` habría exigido conocer la altura exacta del primero (frágil ante cambios de plataforma/tamaño de fuente). Con un contenedor flex en columna, el segundo selector cae automáticamente debajo del primero sin necesidad de ese cálculo — mismo principio de robustez que ya se aplicó al posicionamiento original, llevado un paso más allá.
+5. **Aviso de "sin resultados" con `ToastController` (imperativo), no un `<ion-toast>` declarativo enlazado a un signal `isOpen`.** El disparador natural de este aviso es un efecto secundario de `redraw()` (que corre dentro de un `effect()` de Angular, no de un manejador de evento con acceso cómodo a plantilla) — mismo patrón imperativo ya usado en el proyecto para `ModalController` (`favorites-panel.page.ts`, `[[07-monitorizacion-historica]]`). Encaja mejor con "avisar de un evento puntual" que con un estado persistente que la plantilla deba reflejar.
+6. **El aviso comprueba `estacionesCache.length > 0` antes de mostrarse**, para no avisar de un "no hay gasolineras" falso mientras la descarga inicial de MITECO todavía está en curso (si el usuario cambia de radio antes de que `loadNearestStations` resuelva, `estacionesCache` sigue siendo `[]`, y sin este guard se dispararía el mismo Toast por la razón equivocada).
+7. **`color="medium"` + botón "OK" (`role: 'cancel'`) + `duration: 3000`, no un toast de error (`color="danger"`).** No haber gasolineras en un radio pequeño no es un fallo de la app (a diferencia de `stationsError`/`locationError`, ya mostrados como banners persistentes en rojo) — es información esperable ("prueba con un radio mayor"), así que se usa el tono neutro por defecto de Ionic en vez del color de error ya reservado para fallos reales de red/Firebase.
+8. **`position: 'bottom'`, no `'top'`.** La cabecera translúcida y ambos `ion-select` ya ocupan la franja superior; un toast en la parte inferior no compite visualmente con ellos y queda cerca de donde ya aparecen `locationError`/`stationsError` (`.map__errors`, ancladas con `bottom: 12px`).
+
+### Seguridad y Costes
+
+- Sin llamadas nuevas a Firestore/Cloud Functions ni a la API de MITECO: cambiar de radio reutiliza `estacionesCache` ya descargado, igual que cambiar de combustible (ver Seguridad y Costes ya documentado para el filtro de combustible).
+- `ToastController` no añade ninguna suscripción persistente: cada Toast se crea, se presenta y se autodestruye solo tras `duration`/al pulsar "OK" — no requiere limpieza manual en `ngOnDestroy`.
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+- **Verificado con Playwright + cuenta de prueba real** (creada y eliminada con la API REST `accounts:signUp`/`accounts:delete`, mismo procedimiento ya usado en ciclos anteriores): login → `/home` (geolocalización denegada en el entorno headless, cae al centro por defecto de Madrid, comportamiento ya documentado) → confirmado que:
+  1. Aparecen 2 `ion-select` dentro de `.map__filters`, apilados correctamente sin solaparse con la cabecera.
+  2. Con el radio por defecto (25 km): 50 marcadores dibujados.
+  3. Al elegir "5 km" desde el propio control (popover real de Ionic, `getByRole('radio', { name: '5 km', exact: true })`): sigue habiendo 50 marcadores — **resultado esperado, no un fallo**: Madrid centro es una zona muy densa en gasolineras, así que incluso 5 km ya contiene más de las `MAX_ESTACIONES_EN_MAPA` (50) disponibles; confirma que el control real dispara `redraw()` correctamente sin necesitar forzar un radio ínfimo para probar el camino "hay resultados".
+  4. Para probar el camino "sin resultados" (que ninguna combinación de las 7 opciones produce en una capital tan densa), se forzó `maxDistanceKm.set(0.001)` directamente sobre la instancia del componente (`ng.getComponent`, API de depuración de Angular en modo desarrollo) en vez de a través de la UI — confirmando así la lógica de `redraw()`/`presentEmptyResultsToast()` de forma determinista: 0 marcadores dibujados y el Toast **"No se ha encontrado ninguna gasolinera con ese combustible dentro de ese radio."** visible, con su botón "OK", sin solaparse con el resto de la interfaz (ver captura).
+  5. Cero errores de consola durante todo el flujo.
+- Cuenta de prueba eliminada (`accounts:delete`) al terminar.
+- **Pendiente explícito para `[REVIEWER]`:** confirmar el aspecto en modo oscuro real del sistema (Toast y ambos `ion-select` usan componentes/colores estándar de Ionic, ya theme-aware por diseño, pero no verificado visualmente en modo oscuro en este ciclo); y confirmar en una zona con pocas gasolineras reales (no simulable fácilmente desde este entorno) que el Toast aparece también a través de la UI real, no solo forzando el signal.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[REVIEWER]:** confirmar que `onDistanceChange` no introduce el mismo bug de reactividad...~~ **Hecho, ver auditoría más abajo.**
+- **[ARQUITECTO] (futuro, opcional):** si se detecta que el Toast debería evitar mostrarse repetidamente para radios distintos igual de vacíos en sesiones reales de usuarios en zonas rurales, considerar un `debounce`/deduplicado — no observado como problema real en este ciclo.
+
+---
+
+## Auditoría [REVIEWER]: filtro de radio de distancia
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/shared/components/map/map.component.ts` (`haversineDistanceKm`, `redraw`, `onDistanceChange`, `presentEmptyResultsToast`)
+- `src/app/shared/components/map/map.component.html`/`.scss`
+
+Metodología: no se da por buena la auditoría/verificación ya hecha por `[ARQUITECTO]`/`[UI-DEV]` en ciclos anteriores de este mismo documento sin releerla — se releyó el código actual completo y se añadió verificación **independiente** (no una repetición de la ya hecha): una comprobación matemática del haversine contra distancias reales conocidas (no solo contra los propios datos de MITECO, como hizo el ciclo de `[ARQUITECTO]`), y una prueba de varios ciclos consecutivos de cambio de radio (no solo uno) para el punto de los marcadores duplicados.
+
+### 1. ¿El filtro de distancia se aplica de forma matemáticamente correcta (haversine, en km)?
+
+- [x] **Fórmula releída línea a línea (`map.component.ts:44-52`) — es la fórmula del haversine estándar**, sin errores de signo ni de orden de operandos: `dLat`/`dLng` como diferencia de radianes, `h = sin²(dLat/2) + cos(lat1)·cos(lat2)·sin²(dLng/2)`, y `2·R·asin(√h)` como distancia final. `R = 6371` km (radio medio de la Tierra, valor estándar).
+- [x] **Verificación matemática independiente (no contra datos de MITECO, sino contra distancias reales conocidas de antemano), ejecutada en Node con una copia exacta de la función:**
+
+  | Caso | Calculado | Esperado (dato público) | Resultado |
+  |---|---|---|---|
+  | Madrid → Barcelona | 505.443 km | ≈505 km | PASS |
+  | Madrid → Toledo | 67.461 km | ≈68 km | PASS |
+  | Ecuador, 1° de longitud | 111.195 km | 111.19 km (dato geodésico estándar) | PASS |
+  | Mismo punto (A = B) | 0.000 km | 0 km | PASS |
+  | Simetría A→B vs. B→A | 67.461085 km ambos sentidos | Deben coincidir exactamente | PASS |
+
+  Los 5 casos pasan. La simetría exacta (A→B idéntico a B→A, no solo aproximado) confirma que no hay ningún término asimétrico mal ubicado en la fórmula (ej. restar en el orden equivocado).
+- [x] **El filtro (`item.distanciaKm <= maxDistanceKm`) usa la MISMA `distanciaKm` ya calculada por `haversineDistanceKm` en el `.map()` previo del propio pipeline** (`map.component.ts:557`, `.filter` en la línea 565) — no una segunda fórmula ni una aproximación distinta (ej. distancia euclídea en grados, que sería incorrecta y dependiente de la latitud) para decidir qué entra dentro del radio.
+- [x] **Unidades consistentes de principio a fin: kilómetros.** `EARTH_RADIUS_KM = 6371` (km) → `haversineDistanceKm` devuelve km → `DISTANCE_OPTIONS` están en km (`5, 10, 15...`) → la comparación `distanciaKm <= maxDistanceKm` compara km contra km. No hay ninguna conversión de unidades a medio camino que pudiera desalinearse (ej. metros en un sitio, km en otro).
+- [x] **Reconfirmado (ya verificado por `[ARQUITECTO]`, no repetido aquí en detalle): 0 estaciones fuera de rango coladas** en la verificación contra datos reales de MITECO ya documentada en la sección "Filtro de radio máximo" de este mismo archivo.
+
+**Veredicto punto 1: matemáticamente correcto.** Fórmula estándar sin errores, confirmada independientemente contra 5 distancias reales conocidas (no solo contra los propios datos de la app), unidades consistentes en km de principio a fin, y el filtro usa la misma distancia ya calculada, sin una segunda fórmula divergente.
+
+### 2. ¿Se evita que el mapa se quede con pines antiguos al cambiar el radio?
+
+- [x] **`this.stationsLayer.clearLayers()` (línea 580) se ejecuta INCONDICIONALMENTE antes de volver a dibujar**, sin ninguna rama que la salte — y es la MISMA línea que ya limpiaba los marcadores al cambiar de combustible (no se duplicó una segunda ruta de limpieza específica para el radio, que habría sido una superficie de error adicional): `redraw()` es la única función que dibuja marcadores de gasolinera, y cualquier cambio (combustible O radio) pasa por el mismo `effect()` → mismo `redraw()` → mismo `clearLayers()`.
+- [x] **Verificación empírica reforzada (varios ciclos consecutivos, no solo uno) con Playwright + cuenta de prueba real:** 6 cambios de radio seguidos (25→10→50→15→Sin límite→5 km, en ese orden, incluyendo subir y bajar el radio, no solo una dirección) — **exactamente 50 marcadores en el DOM tras cada cambio, nunca más.** Si `clearLayers()` no se ejecutara (o los marcadores solo se ocultaran en vez de eliminarse), el conteo crecería con cada ciclo (100, 150, 200...); no fue el caso en ninguno de los 6 cambios.
+- [x] **`estacionesPorId`/`markersPorId` también se reinician en cada `redraw()`** (líneas 585-586), antes del bucle que crea los marcadores nuevos — no acumulan referencias a estaciones/marcadores de un radio anterior que ya no está dibujado (relevante para que `onFavoriteButtonClick`/`syncMarkerIcons` no operen sobre un marcador ya destruido).
+- [x] **Cero errores de consola durante los 6 cambios de radio** en la verificación empírica — ninguna excepción de Leaflet al limpiar/recrear la capa repetidamente.
+
+**Veredicto punto 2: correcto, sin pines antiguos.** El radio reutiliza exactamente el mismo mecanismo de limpieza ya auditado para el combustible (`clearLayers()` incondicional antes de redibujar), confirmado ahora con 6 ciclos consecutivos de cambio de radio (en vez de uno solo) sin ninguna acumulación.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores (reconfirmado).
+- [x] **Sin llamadas nuevas a Firestore/MITECO por cambiar de radio** — reutiliza `estacionesCache`, igual que el combustible.
+- [x] **`ToastController` no deja overlays huérfanos**: cada Toast se autodestruye por `duration`/botón "OK", sin estado que sobreviva a `ngOnDestroy`.
+
+### Veredicto final
+
+**Aprobado para commit.** El cálculo de distancia es matemáticamente correcto (fórmula estándar, verificada independientemente contra 5 distancias reales conocidas, no solo contra los datos propios de la app), y el radio no deja pines antiguos en el mapa (mismo mecanismo de limpieza ya auditado para el combustible, reconfirmado con 6 ciclos consecutivos de cambio sin ninguna acumulación).
