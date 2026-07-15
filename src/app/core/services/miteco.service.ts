@@ -53,6 +53,7 @@ const BRAND_KEYWORDS: ReadonlyArray<readonly [GasStationBrand, readonly string[]
   ['Galp', ['GALP']],
   ['Petronor', ['PETRONOR']],
   ['Petroprix', ['PETROPRIX']],
+  ['Beroil', ['BEROIL']],
 ];
 
 /** Rótulos que son solo un código interno (ej. "Nº 10.935", "13344") en vez de un nombre comercial. */

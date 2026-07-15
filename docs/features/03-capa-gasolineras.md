@@ -567,3 +567,99 @@ Metodología: no se da por buena la verificación empírica ya hecha por `[ARQUI
 ### Veredicto final
 
 **Aprobado para commit.** La detección de Petroprix es robusta frente a cualquier variación de mayúsculas/minúsculas (confirmado con 9 casos propios, más allá del formato real de MITECO), sin ninguna regresión en las 6 marcas ya existentes ni en los casos límite ya auditados. Confirmado de forma independiente que no existe ningún mecanismo de color/icono por marca en la aplicación — no faltaba ningún "caso por defecto" que añadir para Petroprix, dado que ninguna marca lo tiene.
+
+---
+
+## Nueva marca: Beroil
+
+**Rol:** [ARQUITECTO]
+**Estado:** Implementado (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivos modificados:**
+- `src/app/core/models/gas-station.model.ts` (`GasStationBrand`, nuevo valor `'Beroil'`)
+- `src/app/core/services/miteco.service.ts` (`BRAND_KEYWORDS`, nueva entrada)
+
+### Qué hace
+
+Añade **Beroil** (marca low-cost) como marca reconocida, siguiendo exactamente el mismo mecanismo ya usado para las 7 marcas existentes (incluida Petroprix, ciclo anterior): una entrada más en `BRAND_KEYWORDS`, sin ninguna rama de código nueva.
+
+```ts
+export type GasStationBrand =
+  | 'Repsol'
+  | 'Cepsa'
+  | 'BP'
+  | 'Shell'
+  | 'Galp'
+  | 'Petronor'
+  | 'Petroprix'
+  | 'Beroil'
+  | 'Independiente'
+  | 'Otra';
+```
+
+```ts
+const BRAND_KEYWORDS: ReadonlyArray<readonly [GasStationBrand, readonly string[]]> = [
+  // ...marcas ya existentes...
+  ['Petroprix', ['PETROPRIX']],
+  ['Beroil', ['BEROIL']],
+];
+```
+
+### Justificación de Diseño (ARQUITECTO)
+
+1. **Antes de elegir la palabra clave, se comprobó el formato REAL del `Rótulo` en la API de MITECO** (mismo criterio metodológico ya aplicado al añadir Petroprix, y a las 6 marcas originales, ver Justificación de Diseño original de este documento): 42 estaciones reales contienen "BEROIL" en su `Rótulo`, con variantes (`"BEROIL"`, `"BEROIL GASTEIZ"`, `"BEROIL, S.L."`, `"BEROIL LAS ROSAS"`, `"BEROIL NAVALMANZANO"`, `"BEROIL VILLANUBLA"`, con y sin espacio final) — todas contienen "BEROIL" como subcadena exacta, así que una única palabra clave (`'BEROIL'`) las cubre todas sin necesitar variantes adicionales (a diferencia de Cepsa, que sí necesita dos palabras clave — `CEPSA`/`MOEVE` — por el rebranding comercial del grupo).
+2. **Mismo mecanismo genérico, ninguna rama de código nueva** — igual que Petroprix, Beroil es una entrada más de tabla, no un `if` especial. `toBrand()` no se modificó.
+3. **Añadida al FINAL de la unión de `GasStationBrand` (tras `Petroprix`, antes de `Independiente`/`Otra`)**, en el mismo orden en que se añadió a `BRAND_KEYWORDS` — mismo criterio de "orden de llegada", sin reordenar las marcas ya existentes.
+
+### Verificación empírica (no solo lectura de código)
+
+| | Antes del fix | Después del fix |
+|---|---|---|
+| Estaciones con "BEROIL" en el `Rótulo` real | 42 | 42 |
+| Mapeadas a `'Beroil'` | **0** | **42** |
+| Colisiones con las 7 marcas ya mapeadas | — | **0** |
+
+Adicionalmente, se comprobó la premisa del encargo ("otra marca muy barata"): el precio medio de Gasolina 95 en las 42 estaciones Beroil es **1,489 €**, frente a una media general de **1,563 €** en las ~10.943 estaciones que venden ese combustible — consistente con el posicionamiento low-cost de la marca.
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[REVIEWER]:** repetir el mismo par de comprobaciones...~~ **Hecho, ver auditoría más abajo.**
+
+---
+
+## Auditoría [REVIEWER]: mapeo de Beroil
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/core/services/miteco.service.ts` (`BRAND_KEYWORDS`, `toBrand`)
+- `src/app/core/models/gas-station.model.ts` (`GasStationBrand`)
+- `src/app/shared/components/map/map.component.ts`, `src/app/pages/favorites-panel/*`
+
+Metodología: mismo par de comprobaciones ya aplicadas a Petroprix, repetidas de forma independiente para Beroil (no se asume que "ya funcionó para Petroprix" sea suficiente para dar por buena esta marca sin verificarla por separado).
+
+### 1. ¿La detección de Beroil es robusta y no sensible a mayúsculas/minúsculas?
+
+- [x] **Misma normalización ya auditada (`toBrand()` sin cambios de lógica, solo una entrada nueva en `BRAND_KEYWORDS`): `.toUpperCase()` incondicional sobre el `Rótulo` completo antes de comparar.**
+- [x] **Batería de 22 casos ejecutada de forma independiente**: 10 variaciones de "beroil" (mayúsculas, minúsculas, mixto — `BerOil`/`bEROIL` —, con espacios, y los 3 formatos reales observados en MITECO: `"Beroil Gasteiz"`, `"BEROIL, S.L."`, `"BEROIL "` con espacio final) — **las 10 se resuelven a `'Beroil'`**. 9 casos de control (las 7 marcas ya existentes, incluida Petroprix) y 3 casos límite ya auditados — sin ninguna regresión.
+- [x] **Reconfirmada la verificación empírica de `[ARQUITECTO]` contra datos reales** (42 estaciones con "BEROIL", las 42 mapeadas correctamente, 0 colisiones) — metodología idéntica a la ya validada para Petroprix, aceptada.
+
+**Veredicto punto 1: robusto y correcto**, mismo nivel de confianza ya establecido para Petroprix.
+
+### 2. ¿Se ha añadido un caso por defecto o color para esta marca en la UI?
+
+- [x] **Búsqueda repetida (`grep -rn "Beroil\|GasStationBrand"` sobre `src/`): los únicos resultados son la declaración de tipo, la entrada de `BRAND_KEYWORDS`, y comentarios/tipos de campo** — ningún `switch`/mapa de color condicionado por marca, igual que para las 8 marcas restantes.
+- [x] **Sin cambios en `map.component.ts` ni `favorites-panel`** en este ciclo (confirmado por `git diff`/lectura): Beroil hereda automáticamente el mismo tratamiento de texto plano que el resto de marcas, sin necesitar ningún caso nuevo — mismo razonamiento ya documentado en la auditoría de Petroprix.
+
+**Veredicto punto 2: correcto, no falta nada por añadir** — mismo motivo exacto ya confirmado para Petroprix: no existe ningún mecanismo de color/icono por marca en la aplicación.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores (reconfirmado).
+- [x] **Sin coste nuevo ni riesgo de seguridad**: misma entrada de tabla que las 7 marcas anteriores, sin ninguna llamada ni interpolación nueva de texto libre de la API.
+
+### Veredicto final
+
+**Aprobado para commit.** La detección de Beroil es robusta frente a mayúsculas/minúsculas (22 casos verificados, incluidos los 3 formatos reales observados en MITECO), sin regresión en las 8 marcas restantes. Confirmado de nuevo que no existe ningún mecanismo de color/icono por marca en la aplicación — no falta ningún caso por defecto que añadir.
