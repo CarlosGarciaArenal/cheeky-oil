@@ -186,6 +186,25 @@
   margin: -4px -8px -4px 0;
 }
 
+/*
+ * `size="small"` de Ionic no reduce por sí solo el padding horizontal de un
+ * botón "icon-only" (pensado por defecto para texto) — sin este ajuste el
+ * icono queda con aire de sobra a los lados, desperdiciando exactamente el
+ * espacio que este botón (icono en vez de texto "Monitorizar") busca ahorrar.
+ */
+.favorite-card__history {
+  --padding-start: 8px;
+  --padding-end: 8px;
+}
+
+.favorite-card__history ion-icon {
+  font-size: 1.1rem;
+}
+
+.favorites-panel__general-history {
+  margin: 16px 0 0;
+}
+
 @media (prefers-color-scheme: dark) {
   /* Mismos pares oscuros que `.gas-station-popup` en `global.scss`. Contraste verificado: `#ffd9b8` sobre `#2b1c12` → 12.42:1; `#ff8a5b` sobre `#2b1c12` → 7.07:1; `#c99368` sobre `#2b1c12` → 6.14:1. */
   .favorite-card {

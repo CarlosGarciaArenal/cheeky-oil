@@ -119,6 +119,22 @@
               </ion-button>
 
               <ion-button
+                class="favorite-card__history"
+                fill="outline"
+                color="medium"
+                size="small"
+                [disabled]="loadingHistoryId() === item.favorito.id"
+                (click)="openStationHistory(item.favorito)"
+                [attr.aria-label]="'Ver evolución de precio de ' + item.favorito.marca"
+              >
+                @if (loadingHistoryId() === item.favorito.id) {
+                  <ion-spinner name="crescent" aria-label="Cargando histórico..."></ion-spinner>
+                } @else {
+                  <ion-icon slot="icon-only" name="stats-chart-outline"></ion-icon>
+                }
+              </ion-button>
+
+              <ion-button
                 class="favorite-card__remove"
                 fill="clear"
                 color="medium"
@@ -138,6 +154,21 @@
           </li>
         }
       </ul>
+
+      <ion-button
+        class="favorites-panel__general-history"
+        expand="block"
+        fill="solid"
+        [disabled]="loadingHistoryId() === generalHistoryId"
+        (click)="openGeneralHistory()"
+      >
+        @if (loadingHistoryId() === generalHistoryId) {
+          <ion-spinner name="crescent" aria-label="Cargando histórico general..."></ion-spinner>
+        } @else {
+          <ion-icon slot="start" name="stats-chart-outline"></ion-icon>
+          Ver evolución general
+        }
+      </ion-button>
     }
   </div>
 </ion-content>

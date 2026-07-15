@@ -5,15 +5,22 @@ import {
   collectionData,
   deleteDoc,
   doc,
+  documentId,
   getCountFromServer,
+  getDoc,
+  getDocs,
+  orderBy,
+  query,
   setDoc,
+  where,
 } from '@angular/fire/firestore';
-import { Observable, combineLatest, map, throwError } from 'rxjs';
+import { Observable, combineLatest, from, map, of, tap, throwError } from 'rxjs';
 
 import { AuthService } from './auth.service';
 import { MitecoService } from './miteco.service';
 import { FuelType, GasStation } from '../models/gas-station.model';
 import { Favorite, FavoriteWithPrice } from '../models/favorite.model';
+import { PriceHistoryDoc, PriceHistoryPoint } from '../models/price-history.model';
 import { MAX_GASOLINERAS_GUARDADAS } from '../models/user.model';
 
 /**
@@ -36,6 +43,18 @@ export class FavoritesService {
 
   private favoritesCollectionPath(uid: string): string {
     return `users/${uid}/favorites`;
+  }
+
+  private historyCollectionPath(uid: string, ideess: string): string {
+    return `users/${uid}/favorites/${ideess}/history`;
+  }
+
+  /** `YYYY-MM-DD` en huso horario local del dispositivo — coherente con `[[07-monitorizacion-historica]]`. */
+  private dateId(fecha: Date): string {
+    const yyyy = fecha.getFullYear();
+    const mm = String(fecha.getMonth() + 1).padStart(2, '0');
+    const dd = String(fecha.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
   }
 
   /** UID puntual y síncrono: los métodos de este servicio solo se invocan tras `authGuard`. */
@@ -157,10 +176,20 @@ export class FavoritesService {
    * como haría llamar a este método por su cuenta. Este método sigue siendo
    * válido y correcto para cualquier consumidor futuro que solo necesite
    * "favoritos con precio" en una sola llamada, sin ese requisito extra.
+   *
+   * Historiador (RF-04, `[[07-monitorizacion-historica]]`): el `tap(...)`
+   * dispara `recordTodayHistory` como side-effect de "fire-and-forget" —
+   * NO forma parte de la cadena del `Observable` (no se hace `switchMap` a
+   * la promesa) para que un fallo o una latencia de Firestore al ESCRIBIR el
+   * histórico nunca retrase ni rompa la emisión de los precios de HOY, que
+   * es lo único que este método promete a sus consumidores. Cualquier error
+   * se captura y se registra en consola dentro del propio método privado,
+   * nunca llega al `Observable` público.
    */
   getFavoritesWithPrices(combustibleType: FuelType): Observable<FavoriteWithPrice[]> {
     return combineLatest([this.getFavorites(), this.mitecoService.getEstaciones()]).pipe(
       map(([favoritos, estaciones]) => this.mergeWithPrices(favoritos, estaciones, combustibleType)),
+      tap((favoritosConPrecio) => this.recordTodayHistory(favoritosConPrecio)),
     );
   }
 
@@ -237,5 +266,130 @@ export class FavoritesService {
         favorito.isMostExpensive = true;
       }
     }
+  }
+
+  /**
+   * Historiador (RF-04, `[[07-monitorizacion-historica]]`): por cada favorito
+   * con precio conocido hoy, registra en Firestore
+   * `users/{uid}/favorites/{ideess}/history/{YYYY-MM-DD}` (id de documento =
+   * fecha de hoy) con el único campo `price` — pero SOLO si ese documento no
+   * existe ya, comprobado con un `getDoc` previo. Con como mucho 10
+   * favoritos, el coste máximo de esta llamada es 10 lecturas (`getDoc`) +
+   * hasta 10 escrituras (`setDoc`, solo la PRIMERA vez que se consulta cada
+   * estación en el día — el resto del día, siempre 0 escrituras).
+   *
+   * `Promise.all`, no un `for` secuencial: las hasta 10 comprobaciones
+   * "¿existe ya el de hoy?" son independientes entre sí (estaciones
+   * distintas, subcolecciones distintas) — no hay razón para esperar a que
+   * termine una antes de lanzar la siguiente.
+   *
+   * Favoritos con `precio: null` (estación sin ese combustible, o ya no
+   * presente en la respuesta de MITECO) se excluyen: no hay ningún precio
+   * real de hoy que registrar para ellos.
+   *
+   * CORRECCIÓN (ciclo [UI-DEV], `[[07-monitorizacion-historica]]`): este
+   * método pasa a ser público. En el diseño original solo se llamaba desde
+   * el `tap(...)` de `getFavoritesWithPrices` — pero `FavoritesPanelPage`
+   * (el ÚNICO consumidor real de esta pantalla, ver `[[06-favoritos]]`) NO
+   * usa `getFavoritesWithPrices`: llama a `getFavorites()` y a
+   * `mergeWithPrices()` por separado (a propósito, para compartir el mismo
+   * listener de Firestore entre la lista rápida y el cruce con MITECO). Con
+   * el método `private`, el Historiador nunca llegaba a ejecutarse en la
+   * práctica — ningún precio quedaba jamás registrado. Ahora
+   * `FavoritesPanelPage` lo llama explícitamente tras `mergeWithPrices()`
+   * (ver su constructor), y `getFavoritesWithPrices` conserva su propio
+   * `tap(...)` para cualquier consumidor futuro que sí la use directamente.
+   */
+  async recordTodayHistory(favoritosConPrecio: FavoriteWithPrice[]): Promise<void> {
+    const uid = this.authService.getCurrentUser()?.uid;
+    if (!uid) {
+      return;
+    }
+
+    const hoy = this.dateId(new Date());
+
+    await Promise.all(
+      favoritosConPrecio
+        .filter((favorito): favorito is FavoriteWithPrice & { precio: number } => favorito.precio !== null)
+        .map(async (favorito) => {
+          try {
+            const historyDocRef = doc(this.firestore, this.historyCollectionPath(uid, favorito.id), hoy);
+            const historySnap = await getDoc(historyDocRef);
+            if (historySnap.exists()) {
+              return;
+            }
+
+            const entry: PriceHistoryDoc = { price: favorito.precio };
+            await setDoc(historyDocRef, entry);
+          } catch (error) {
+            // No debe romper la emisión de precios de hoy (ver justificación en getFavoritesWithPrices).
+            console.error(`No se pudo registrar el histórico de precio de ${favorito.id}`, error);
+          }
+        }),
+    );
+  }
+
+  /**
+   * RF-04 (Monitorización histórica): devuelve, para cada IDEESS de
+   * `ideessList`, sus últimos `days` días de histórico de precio (por
+   * defecto 30), como un `Map<ideess, PriceHistoryPoint[]>` listo para
+   * alimentar una gráfica (ej. `ng2-charts`) por gasolinera. Ver arquitectura
+   * completa en `docs/features/07-monitorizacion-historica.md`.
+   *
+   * Lectura puntual (`getDocs`), no un listener en vivo (`collectionData`):
+   * el histórico de días pasados es inmutable una vez escrito (el propio
+   * `recordTodayHistory` nunca reescribe un día ya registrado), así que no
+   * hay ninguna actualización en tiempo real que escuchar — un listener
+   * permanente aquí solo mantendría abierta una conexión sin ningún cambio
+   * que reportar la inmensa mayoría del tiempo.
+   *
+   * Filtro por rango de fechas con `where(documentId(), '>=', cutoff)`, no
+   * un campo `date` duplicado dentro del documento: como el id de cada
+   * documento YA ES la fecha `YYYY-MM-DD` (`recordTodayHistory`), y esas
+   * cadenas ordenan lexicográficamente igual que cronológicamente, Firestore
+   * puede filtrar y ordenar directamente por `documentId()` sin necesitar un
+   * campo adicional que solo repetiría el propio id del documento.
+   *
+   * Coste: una consulta por IDEESS solicitado (`Promise.all`, en paralelo, no
+   * secuencial) — con hasta 10 favoritos y `days = 30`, hasta 10 consultas
+   * que devuelven, en conjunto, como mucho 300 lecturas (10 × 30), acotado
+   * por cuántos días llevan realmente registrados (nunca más que `days`, y
+   * nunca más que los días que la app lleva en uso). **Recomendación
+   * explícita para quien consuma este método (`[[UI-DEV]]`, fuera de este
+   * documento):** llamarlo una única vez por apertura de la gráfica/pantalla
+   * de histórico, no dentro de un binding o `effect()` que se reevalúe en
+   * cada redibujado — mismo criterio de coste ya documentado para
+   * `getFavoritesWithPrices` en `[[06-favoritos]]`.
+   */
+  getHistory(ideessList: string[], days: number = 30): Observable<Map<string, PriceHistoryPoint[]>> {
+    const uid = this.authService.getCurrentUser()?.uid;
+    if (!uid) {
+      return throwError(() => new Error('No hay sesión activa: no se puede acceder al histórico de precios.'));
+    }
+
+    if (ideessList.length === 0) {
+      return of(new Map<string, PriceHistoryPoint[]>());
+    }
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - (days - 1));
+    const cutoffId = this.dateId(cutoff);
+
+    return from(
+      Promise.all(
+        ideessList.map(async (ideess): Promise<readonly [string, PriceHistoryPoint[]]> => {
+          const historyRef = collection(this.firestore, this.historyCollectionPath(uid, ideess));
+          const historyQuery = query(historyRef, where(documentId(), '>=', cutoffId), orderBy(documentId()));
+          const snapshot = await getDocs(historyQuery);
+
+          const puntos: PriceHistoryPoint[] = snapshot.docs.map((historyDoc) => ({
+            date: historyDoc.id,
+            price: (historyDoc.data() as PriceHistoryDoc).price,
+          }));
+
+          return [ideess, puntos] as const;
+        }),
+      ),
+    ).pipe(map((entradas) => new Map(entradas)));
   }
 }

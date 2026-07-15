@@ -10,16 +10,27 @@ import {
   IonSelectOption,
   IonSpinner,
   IonText,
+  ModalController,
   SelectCustomEvent,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { arrowBackOutline, medalOutline, trashOutline, trendingUpOutline } from 'ionicons/icons';
-import { catchError, combineLatest, map, of, shareReplay, switchMap, tap } from 'rxjs';
+import { arrowBackOutline, medalOutline, statsChartOutline, trashOutline, trendingUpOutline } from 'ionicons/icons';
+import { catchError, combineLatest, firstValueFrom, map, of, shareReplay, switchMap, tap } from 'rxjs';
 
+import { PriceChartModalComponent, PriceChartStation } from '../../components/price-chart-modal/price-chart-modal.component';
 import { FuelType, GasStation } from '../../core/models/gas-station.model';
 import { Favorite, FavoriteWithPrice } from '../../core/models/favorite.model';
 import { FavoritesService } from '../../core/services/favorites.service';
 import { MitecoService } from '../../core/services/miteco.service';
+
+/**
+ * Id "sentinela" para `loadingHistoryId` cuando el botón en curso es el
+ * general ("Ver evolución general"), no el de una tarjeta concreta. No
+ * puede colisionar con un `Favorite.id` real: los IDEESS de MITECO son
+ * siempre numéricos (ver comentario ya existente sobre `escapeHtmlAttribute`
+ * en `map.component.ts`, `[[06-favoritos]]`).
+ */
+const GENERAL_HISTORY_ID = '__general__';
 
 /**
  * Etiquetas de combustible para el selector de esta página. Deliberadamente
@@ -83,6 +94,7 @@ function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localid
 export class FavoritesPanelPage {
   private readonly favoritesService = inject(FavoritesService);
   private readonly mitecoService = inject(MitecoService);
+  private readonly modalController = inject(ModalController);
   private readonly destroyRef = inject(DestroyRef);
 
   protected readonly fuelLabels = FUEL_LABELS;
@@ -116,6 +128,14 @@ export class FavoritesPanelPage {
   protected readonly removingId = signal<string | null>(null);
 
   /**
+   * `id` del favorito (o `GENERAL_HISTORY_ID`) cuyo botón de histórico está
+   * esperando `FavoritesService.getHistory(...)` — deshabilita SOLO ese
+   * botón, mismo patrón ya usado por `removingId`.
+   */
+  protected readonly loadingHistoryId = signal<string | null>(null);
+  protected readonly generalHistoryId = GENERAL_HISTORY_ID;
+
+  /**
    * Vista combinada para la plantilla: cada favorito de la lista rápida,
    * emparejado con su entrada de `preciosPorId` (o `null` si ese mapa
    * general aún no ha llegado). Evita anidar `preciosPorId()?.get(id)` varias
@@ -130,7 +150,7 @@ export class FavoritesPanelPage {
   });
 
   constructor() {
-    addIcons({ arrowBackOutline, medalOutline, trashOutline, trendingUpOutline });
+    addIcons({ arrowBackOutline, medalOutline, statsChartOutline, trashOutline, trendingUpOutline });
 
     // `shareReplay({ bufferSize: 1, refCount: true })`: los dos usos de abajo
     // (la lista rápida, y el cruce con precios) necesitan los MISMOS datos de
@@ -222,6 +242,17 @@ export class FavoritesPanelPage {
       .subscribe((favoritosConPrecio) => {
         this.preciosPorId.set(new Map(favoritosConPrecio.map((favorito) => [favorito.id, favorito])));
         this.isLoading.set(false);
+
+        // Historiador (RF-04, `[[07-monitorizacion-historica]]`), llamado
+        // explícitamente aquí: esta página NO usa `getFavoritesWithPrices`
+        // (que ya lleva su propio `tap(recordTodayHistory)` para otros
+        // consumidores), sino `getFavorites()` + `mergeWithPrices()` por
+        // separado — sin esta llamada, el Historiador nunca se ejecutaría en
+        // la práctica. Fire-and-forget: `recordTodayHistory` ya captura sus
+        // propios errores (ver `FavoritesService`), así que un fallo de
+        // Firestore al escribir el histórico nunca puede afectar a los
+        // precios ya mostrados en pantalla.
+        void this.favoritesService.recordTodayHistory(favoritosConPrecio);
       });
   }
 
@@ -255,6 +286,65 @@ export class FavoritesPanelPage {
       );
     } finally {
       this.removingId.set(null);
+    }
+  }
+
+  /** Botón "gráfica" de una tarjeta concreta: histórico de una única gasolinera. */
+  protected async openStationHistory(favorito: Favorite): Promise<void> {
+    await this.openHistoryModal(favorito.id, [favorito], `Evolución de precio — ${favorito.marca}`);
+  }
+
+  /** Botón "Ver evolución general": histórico de TODOS los favoritos actuales a la vez. */
+  protected async openGeneralHistory(): Promise<void> {
+    await this.openHistoryModal(GENERAL_HISTORY_ID, this.favoritos(), 'Evolución general de tus favoritas');
+  }
+
+  /**
+   * Pide el histórico a `FavoritesService.getHistory(...)` (una sola vez,
+   * `firstValueFrom` — no un listener: el histórico de días pasados es
+   * inmutable, ver justificación en `[[07-monitorizacion-historica]]`) y
+   * presenta `PriceChartModalComponent` ya con los datos resueltos, en vez de
+   * abrir el modal primero y dejar que cargue por su cuenta: así el modal en
+   * sí no necesita conocer `FavoritesService` ni gestionar su propio estado
+   * de carga/error, solo dibujar lo que se le pasa (ver su documentación).
+   *
+   * `loadingId` (el `Favorite.id` de la tarjeta pulsada, o `GENERAL_HISTORY_ID`
+   * para el botón general) deshabilita SOLO ese botón mientras se resuelve,
+   * mismo patrón ya usado por `removingId` en `onRemove`.
+   */
+  private async openHistoryModal(
+    loadingId: string,
+    favoritosParaHistorico: Favorite[],
+    titulo: string,
+  ): Promise<void> {
+    if (this.loadingHistoryId() || favoritosParaHistorico.length === 0) {
+      return;
+    }
+
+    this.loadingHistoryId.set(loadingId);
+    try {
+      const historial = await firstValueFrom(
+        this.favoritesService.getHistory(favoritosParaHistorico.map((favorito) => favorito.id)),
+      );
+
+      const stations: PriceChartStation[] = favoritosParaHistorico.map((favorito) => ({
+        id: favorito.id,
+        marca: favorito.marca,
+        municipio: favorito.municipio,
+        puntos: historial.get(favorito.id) ?? [],
+      }));
+
+      const modal = await this.modalController.create({
+        component: PriceChartModalComponent,
+        componentProps: { stations, title: titulo },
+      });
+      await modal.present();
+    } catch (error: unknown) {
+      this.errorMessage.set(
+        error instanceof Error ? error.message : 'No se pudo cargar el histórico de precios.',
+      );
+    } finally {
+      this.loadingHistoryId.set(null);
     }
   }
 }

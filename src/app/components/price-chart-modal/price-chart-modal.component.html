@@ -1,0 +1,25 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>{{ title }}</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="dismiss()" aria-label="Cerrar">
+        <ion-icon slot="icon-only" name="close-outline"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="price-chart-modal">
+  <div class="price-chart-modal__wrapper">
+    @if (chartData.labels && chartData.labels.length > 0) {
+      <div class="price-chart-modal__canvas">
+        <canvas baseChart [type]="'line'" [data]="chartData" [options]="chartOptions"></canvas>
+      </div>
+    } @else {
+      <p class="price-chart-modal__empty">
+        Todavía no hay histórico de precios registrado para
+        {{ stations.length === 1 ? 'esta gasolinera' : 'estas gasolineras' }}. Vuelve a comprobarlo en unos días.
+      </p>
+    }
+  </div>
+</ion-content>
