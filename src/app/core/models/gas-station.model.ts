@@ -9,6 +9,7 @@ export type GasStationBrand =
   | 'Shell'
   | 'Galp'
   | 'Petronor'
+  | 'Petroprix'
   | 'Independiente'
   | 'Otra';
 
