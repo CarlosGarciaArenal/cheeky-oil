@@ -469,3 +469,101 @@ Marcado con `// TODO(debug temporal)` en el propio código para recordar retirar
 **Ningún error encontrado en la fórmula de distancia.** Parseo de coordenadas correcto con los datos actuales, pero se corrige una vulnerabilidad latente (`?? 0`) que sí podía, en teoría, ocultar estaciones con coordenadas corruptas en vez de excluirlas limpiamente — ahora se descartan explícitamente. Se añade instrumentación temporal para diagnosticar la causa real del reporte del usuario, que muy probablemente no está en el código auditado sino en densidad regional de estaciones o en el origen de geolocalización usado.
 
 **Aprobado para commit.**
+
+---
+
+## Corrección: la marca Petroprix nunca se detectaba (mapeada siempre a "Otra")
+
+**Rol:** [ARQUITECTO]
+**Estado:** Corregido (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivo modificado:**
+- `src/app/core/services/miteco.service.ts` (`BRAND_KEYWORDS`)
+
+### El bug
+
+`GasStationBrand` (`gas-station.model.ts`) ya incluía `'Petroprix'` como valor del tipo desde antes de este ciclo, pero **nunca se había añadido a `BRAND_KEYWORDS`** — la tabla de palabras clave que `toBrand()` recorre para reconocer cada marca dentro del `Rótulo` libre de MITECO (ver `toBrand()`, sección "Justificación de Diseño" de este mismo documento, punto 5). Con el tipo declarado pero sin ninguna regla de detección real, **toda** estación cuyo `Rótulo` contuviera "PETROPRIX" caía por el resto de la función hasta `'Otra'` (o `'Independiente'` si además el rótulo fuera un código numérico, no aplicable aquí) — el tipo existía, pero era inalcanzable en la práctica para esta marca concreta.
+
+### La corrección
+
+```ts
+const BRAND_KEYWORDS: ReadonlyArray<readonly [GasStationBrand, readonly string[]]> = [
+  ['Repsol', ['REPSOL']],
+  ['Cepsa', ['CEPSA', 'MOEVE']],
+  ['BP', ['BP']],
+  ['Shell', ['SHELL']],
+  ['Galp', ['GALP']],
+  ['Petronor', ['PETRONOR']],
+  ['Petroprix', ['PETROPRIX']],
+];
+```
+
+Una única entrada nueva, mismo patrón exacto que las 6 ya existentes (palabra clave en MAYÚSCULAS, coincidencia por subcadena sobre el `Rótulo` ya normalizado a mayúsculas por `toBrand()`).
+
+### Justificación de Diseño (ARQUITECTO)
+
+1. **`.toUpperCase()` + palabra clave en mayúsculas, no `.toLowerCase()` como sugería el encargo.** Ambos enfoques son funcionalmente equivalentes (comparación insensible a mayúsculas/minúsculas) — se mantuvo la convención YA establecida por las 6 marcas existentes (`toBrand()` normaliza el `Rótulo` completo a mayúsculas una única vez, y cada entrada de `BRAND_KEYWORDS` está en mayúsculas) en vez de introducir una segunda convención de casing (minúsculas) solo para esta marca, que habría dejado la tabla inconsistente sin ningún beneficio real — mismo criterio de "no reinventar lo que ya funciona igual de bien" aplicado en el resto de este archivo.
+2. **No se creó ninguna regla especial ni rama de código nueva** — Petroprix encaja exactamente en el mismo mecanismo genérico de `BRAND_KEYWORDS` ya usado por las otras 6 marcas (una entrada de tabla, no un `if` adicional), preservando el diseño ya auditado de "coincidencia por subcadena sobre palabras clave" (ver Justificación de Diseño original, punto 5).
+3. **`GasStationBrand` no se modificó** — el valor `'Petroprix'` ya existía en el tipo antes de este ciclo; el bug era exclusivamente de la tabla de detección, no del modelo de datos.
+4. **Sin asignación de color/icono/logo por marca que extender.** Se revisó `map.component.ts` y `favorites-panel.page.ts`/`.html` (punto 4 del encargo): el color de los marcadores del mapa depende únicamente del ESTADO de la estación (normal = naranja, favorita = amarillo, ubicación del usuario = azul), nunca de la marca — `estacion.marca`/`favorito.marca` se usan siempre como texto plano (nombre en el popup/tarjeta, `title`/`aria-label`), nunca en un `switch`/mapa de color por marca. No existe ningún sitio que necesitara un caso nuevo para Petroprix; el nombre "Petroprix" ya se mostrará correctamente en todos esos sitios de texto en cuanto `toBrand()` la reconozca.
+
+### Verificación empírica (no solo lectura de código)
+
+Se ejecutó `toBrand()` (copia exacta de la lógica, antes y después del fix) en Node contra una descarga real de la API de MITECO:
+
+| | Antes del fix | Después del fix |
+|---|---|---|
+| Estaciones con "PETROPRIX" en el `Rótulo` real | 185 | 185 |
+| Mapeadas a `'Petroprix'` | **0** | **185** |
+| Mapeadas a `'Otra'` | 185 | 0 |
+| Colisiones con otras marcas ya mapeadas correctamente | — | **0** |
+
+Confirma tres cosas: (a) el bug era real y afectaba a 185 estaciones reales de España, no un caso hipotético; (b) el fix las corrige al 100%, ninguna se queda sin reconocer; (c) añadir la palabra clave `'PETROPRIX'` no reclasifica por error ninguna estación que ya se mapeaba correctamente a otra marca (sin falsos positivos por colisión de subcadena, ej. ninguna marca ya existente contiene "PETROPRIX" como subcadena ni viceversa).
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[REVIEWER]:** confirmar la verificación empírica...~~ **Hecho, ver auditoría más abajo.**
+
+---
+
+## Auditoría [REVIEWER]: mapeo de Petroprix
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/core/services/miteco.service.ts` (`BRAND_KEYWORDS`, `toBrand`)
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/pages/favorites-panel/favorites-panel.page.ts`/`.html`/`.scss`
+- `src/app/core/models/gas-station.model.ts`, `favorite.model.ts`
+
+Metodología: no se da por buena la verificación empírica ya hecha por `[ARQUITECTO]` (185 estaciones reales) sin repetirla con casos adicionales — se releyó el código y se ejecutó una batería de pruebas propia, más amplia (variaciones de mayúsculas/minúsculas y casos de control de las 6 marcas ya existentes), además de repetir por cuenta propia la búsqueda de asignaciones de color/icono por marca en toda la base de código.
+
+### 1. ¿La detección de 'petroprix' es robusta y no es sensible a mayúsculas/minúsculas?
+
+- [x] **Confirmado en el código (`toBrand`, `miteco.service.ts:123-134`): `normalizado = (rotulo ?? '').trim().toUpperCase()` convierte SIEMPRE el `Rótulo` completo a mayúsculas antes de comparar**, sin importar el casing original del dato de entrada — la comparación (`.includes('PETROPRIX')`) se hace siempre mayúsculas-contra-mayúsculas, nunca mezclando casings.
+- [x] **Batería de 18 casos ejecutada de forma independiente** (no una repetición de la ya hecha por `[ARQUITECTO]`, que solo probó datos reales de MITECO, siempre en mayúsculas): 9 variaciones de "petroprix" (`PETROPRIX`, `petroprix`, `Petroprix`, `PetroPrix`, `pETROPRIX`, con espacios sobrantes, con razón social realista `"Petroprix Villalba S.L."`, con texto extra en minúsculas, con sufijo `", S.A."`) — **las 9 se resuelven a `'Petroprix'`**, confirmando que la detección es robusta frente a CUALQUIER combinación de mayúsculas/minúsculas, no solo el formato "todo mayúsculas" que MITECO usa hoy en la práctica.
+- [x] **9 casos de control adicionales, sin ningún fallo:** las 6 marcas ya existentes siguen detectándose correctamente tras añadir la entrada de Petroprix (`REPSOL`/`repsol` → `Repsol`, `BP ROMICA` → `BP`, `CEPSA`/`MOEVE` → `Cepsa`), y los 3 casos límite ya auditados en ciclos anteriores de este documento (`Rótulo` vacío/solo espacios → `'Otra'`, código numérico → `'Independiente'`, marca desconocida → `'Otra'`) se mantienen sin regresión.
+- [x] **Reconfirmada la verificación empírica de `[ARQUITECTO]` contra datos reales** (185 estaciones con "PETROPRIX" en el `Rótulo`, las 185 mapeadas correctamente, 0 colisiones con otras marcas) — releída y aceptada como válida tras comprobar que la metodología (copia exacta de la lógica actual, ejecutada contra una descarga real de la API) es sólida.
+
+**Veredicto punto 1: robusto y correcto.** La normalización a mayúsculas es incondicional y ocurre una única vez sobre el `Rótulo` completo antes de cualquier comparación — confirmado no solo con el formato real de MITECO (siempre en mayúsculas) sino con 9 variaciones de casing adicionales que no se dan hoy en la API pero que la función maneja igual de bien, sin ninguna regresión en las marcas ya existentes.
+
+### 2. ¿Se ha añadido un caso por defecto o color para esta marca en la UI?
+
+- [x] **Búsqueda repetida de forma independiente en toda la base de código (`grep -rn "GasStationBrand"` y `grep -rn "Repsol|Cepsa|Shell|Galp|Petronor|Petroprix"` sobre `src/`): CONFIRMADO que no existe ningún sitio que asigne color/icono/logo por marca específica**, en ningún componente. Los únicos 6 resultados de `GasStationBrand` en todo `src/` son: la declaración del tipo (`gas-station.model.ts`), su uso como tipo de campo en `favorite.model.ts`, la tabla `BRAND_KEYWORDS`/la firma de `toBrand()` (`miteco.service.ts`), y un comentario (`map.component.ts`) — ninguno es un `switch`/mapa de color condicionado por el VALOR de la marca.
+- [x] **Confirmado releyendo `map.component.ts`: el color de los marcadores (`STATION_ICON`/`FAVORITE_ICON`/`USER_ICON`) depende exclusivamente del ESTADO de la estación** (normal/favorita/ubicación del usuario), nunca de `estacion.marca` — los 3 iconos son constantes de módulo fijas, sin ninguna rama que lea `marca`.
+- [x] **Confirmado releyendo `favorites-panel.page.html`/`.scss`: `item.favorito.marca` se interpola siempre como texto plano** (nombre en la tarjeta, `aria-label` de los 3 botones) — `.favorite-card__marca` es una clase de estilo de TEXTO (color de tinta fijo, igual para las 8 marcas), no un selector condicionado por marca.
+- [x] **Conclusión: no había ningún "caso por defecto" que faltara añadir, porque nunca existió un mecanismo de casos-por-marca en absoluto.** Todas las marcas (incluida Petroprix, ahora que se detecta correctamente) se muestran exactamente igual — como texto — en cualquier sitio de la interfaz. No añadir un color/icono específico para Petroprix no es una omisión de este ciclo: es coherente con cómo se tratan las otras 7 marcas del enum (`Repsol`, `Cepsa`, `BP`, `Shell`, `Galp`, `Petronor`, `Independiente`, `Otra`), ninguna de las cuales tiene tampoco un color/icono propio.
+
+**Veredicto punto 2: correcto, no falta nada por añadir.** Se confirma de forma independiente (no solo aceptando la afirmación de `[ARQUITECTO]`) que no existe ningún mecanismo de color/icono por marca en la aplicación — ni antes ni después de este fix — así que Petroprix ya se muestra con el mismo tratamiento visual (texto plano) que el resto de marcas, sin necesitar ningún caso nuevo.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores (reconfirmado).
+- [x] **Sin coste nuevo de Firebase/APIs de pago**: el fix es una entrada más en una tabla ya existente, sin ninguna llamada nueva.
+- [x] **Sin riesgo de seguridad**: `'Petroprix'` es un valor más de la unión cerrada `GasStationBrand`, generado igual que el resto por `toBrand()` — nunca se interpola el `Rótulo` original de la API sin pasar por esta función (mismo análisis de seguridad ya vigente en este documento para el resto de marcas).
+
+### Veredicto final
+
+**Aprobado para commit.** La detección de Petroprix es robusta frente a cualquier variación de mayúsculas/minúsculas (confirmado con 9 casos propios, más allá del formato real de MITECO), sin ninguna regresión en las 6 marcas ya existentes ni en los casos límite ya auditados. Confirmado de forma independiente que no existe ningún mecanismo de color/icono por marca en la aplicación — no faltaba ningún "caso por defecto" que añadir para Petroprix, dado que ninguna marca lo tiene.
