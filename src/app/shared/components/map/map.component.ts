@@ -63,6 +63,21 @@ const FUEL_LABELS: Record<FuelKey, string> = {
 /** Clase CSS del botón de favorito dentro del popup (ver `global.scss`), usada tanto al construir el HTML como al localizar el botón vía `querySelector` en `onPopupOpen`. */
 const FAV_BUTTON_CLASS = 'gas-station-popup__fav-btn';
 
+/** Clase CSS del enlace "Cómo llegar" del popup (ver `global.scss`). Es un `<a>` plano: a diferencia del botón de favorito, no necesita `onPopupOpen`/`addEventListener` porque no hay ningún estado de Angular que sincronizar — el navegador gestiona la navegación él solo. */
+const DIRECTIONS_LINK_CLASS = 'gas-station-popup__directions-link';
+
+/**
+ * URL universal de Google Maps para trazar ruta hasta unas coordenadas
+ * (sin API key, sin coste): en móvil, el propio sistema operativo despierta
+ * la app nativa de mapas que el usuario tenga instalada; en escritorio abre
+ * Google Maps en el navegador. `lat`/`lng` vienen siempre de `GasStation`/`Favorite`
+ * (números ya validados por `MitecoService`/Firestore), nunca de texto libre,
+ * así que no requieren el mismo escapado que `escapeHtmlAttribute`.
+ */
+function buildGoogleMapsDirectionsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+}
+
 /**
  * Escapa el valor antes de interpolarlo dentro de un atributo HTML
  * (`data-station-id="..."`). `GasStation.id` (IDEESS) viene de la API
@@ -462,7 +477,26 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     return `
       <strong class="gas-station-popup__marca">${estacion.marca}</strong>
       <p class="gas-station-popup__precio">${FUEL_LABELS[fuel]}: ${precioTexto}</p>
+      ${this.buildDirectionsLinkHtml(estacion.lat, estacion.lng)}
       ${this.buildFavoriteButtonHtml(estacion.id, esFavorito)}
+    `;
+  }
+
+  /**
+   * Enlace "📍 Cómo llegar" embebido en el popup: `target="_blank"` +
+   * `rel="noopener noreferrer"` (nunca dejar que la pestaña nueva pueda
+   * acceder a `window.opener` de esta app, buena práctica estándar para
+   * cualquier enlace externo). Mismo criterio que `buildFavoriteButtonHtml`:
+   * HTML puro, nunca pasa por el compilador de plantillas de Angular.
+   */
+  private buildDirectionsLinkHtml(lat: number, lng: number): string {
+    return `
+      <a
+        class="${DIRECTIONS_LINK_CLASS}"
+        href="${buildGoogleMapsDirectionsUrl(lat, lng)}"
+        target="_blank"
+        rel="noopener noreferrer"
+      >📍 Cómo llegar</a>
     `;
   }
 

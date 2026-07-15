@@ -97,22 +97,37 @@
               </div>
             </div>
 
-            <ion-button
-              class="favorite-card__remove"
-              fill="clear"
-              color="medium"
-              size="small"
-              [disabled]="removingId() === item.favorito.id"
-              (click)="onRemove(item.favorito)"
-              [attr.aria-label]="'Quitar ' + item.favorito.marca + ' de favoritos'"
-            >
-              @if (removingId() === item.favorito.id) {
-                <ion-spinner name="crescent" aria-label="Quitando..."></ion-spinner>
-              } @else {
-                <ion-icon slot="start" name="trash-outline"></ion-icon>
-                Quitar
-              }
-            </ion-button>
+            <div class="favorite-card__actions">
+              <ion-button
+                class="favorite-card__directions"
+                fill="outline"
+                color="medium"
+                size="small"
+                [href]="directionsUrl(item.favorito)"
+                target="_blank"
+                rel="noopener noreferrer"
+                [attr.aria-label]="'Cómo llegar a ' + item.favorito.marca"
+              >
+                📍 Cómo llegar
+              </ion-button>
+
+              <ion-button
+                class="favorite-card__remove"
+                fill="clear"
+                color="medium"
+                size="small"
+                [disabled]="removingId() === item.favorito.id"
+                (click)="onRemove(item.favorito)"
+                [attr.aria-label]="'Quitar ' + item.favorito.marca + ' de favoritos'"
+              >
+                @if (removingId() === item.favorito.id) {
+                  <ion-spinner name="crescent" aria-label="Quitando..."></ion-spinner>
+                } @else {
+                  <ion-icon slot="start" name="trash-outline"></ion-icon>
+                  Quitar
+                }
+              </ion-button>
+            </div>
           </li>
         }
       </ul>

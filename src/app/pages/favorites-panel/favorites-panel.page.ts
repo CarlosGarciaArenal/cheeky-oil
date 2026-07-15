@@ -39,6 +39,17 @@ const FUEL_LABELS: Record<FuelType, string> = {
 const DEFAULT_FUEL: FuelType = 'gasolina95';
 
 /**
+ * URL universal de Google Maps para trazar ruta hasta unas coordenadas (sin
+ * API key, sin coste). Duplicada a propósito respecto a la función homónima
+ * de `map.component.ts` (mismo criterio ya aplicado a `FUEL_LABELS` en este
+ * mismo archivo): evita acoplar esta página a un componente de UI ajeno por
+ * una función de una línea.
+ */
+function buildGoogleMapsDirectionsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+}
+
+/**
  * Panel de favoritos (RF-04, "Monitorización y Comparación"): lista las
  * gasolineras guardadas por el usuario con su precio de HOY para el
  * combustible elegido, resaltando la más barata y la más cara del conjunto.
@@ -176,6 +187,11 @@ export class FavoritesPanelPage {
       .subscribe((favoritosConPrecio) => {
         this.preciosPorId.set(new Map(favoritosConPrecio.map((favorito) => [favorito.id, favorito])));
       });
+  }
+
+  /** Usado desde la plantilla para el `[href]` del enlace "📍 Cómo llegar" de cada tarjeta. */
+  protected directionsUrl(favorito: Favorite): string {
+    return buildGoogleMapsDirectionsUrl(favorito.lat, favorito.lng);
   }
 
   protected onFuelChange(event: SelectCustomEvent): void {

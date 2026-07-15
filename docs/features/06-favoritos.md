@@ -630,3 +630,65 @@ Al implementar el hallazgo 1, mi primer intento envolvió `combineLatest([favori
 ### Veredicto final
 
 **Aprobado para commit.** Contraste de color verificado matemáticamente y en navegador real (claro/oscuro), reutilizando una paleta ya probada en producción. Velocidad percibida corregida atacando la causa real (MITECO, no Firestore), con tiempos medidos que confirman una mejora de ~4x en cuándo aparece la lista. Durante esta misma auditoría se encontraron y corrigieron DOS regresiones de coste introducidas por la propia solución (listener de Firestore duplicado; MITECO re-descargado en cada alta/baja de favorito) antes de aprobar el commit — ninguna de las dos llegó a quedar en el código final. Queda un único pendiente no bloqueante, documentado con honestidad: no se pudo automatizar la verificación en navegador del cambio de combustible por una limitación de la herramienta de pruebas, no del código.
+
+## Navegación externa: enlace "📍 Cómo llegar" (RF-04)
+
+**Rol:** [UI-DEV]
+**Archivos generados/modificados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/pages/favorites-panel/favorites-panel.page.ts` / `.html` / `.scss`
+- `src/global.scss`
+
+### Qué hace
+
+Añade un enlace "📍 Cómo llegar" tanto al popup de gasolinera del mapa como a cada tarjeta del panel de favoritos. Construye la URL universal de Google Maps (`https://www.google.com/maps/dir/?api=1&destination=lat,lng`) a partir de las coordenadas ya presentes en `GasStation`/`Favorite` y la abre en una pestaña/ventana nueva — en móvil, el sistema operativo despierta la app nativa de mapas que el usuario tenga instalada (comportamiento del propio SO, no código de esta app); no hace falta API key ni SDK de mapas adicional (coste cero).
+
+### Diagrama de Flujo (Mermaid)
+
+```mermaid
+flowchart TD
+    A[Usuario ve popup de gasolinera o tarjeta de favorito] --> B{"¿Dónde?"}
+    B -->|Popup del mapa| C["&lt;a href=googleMapsUrl&gt; plano<br/>(HTML de Leaflet, sin Angular)"]
+    B -->|Tarjeta de favoritos| D["ion-button [href]=directionsUrl()<br/>(plantilla Angular normal)"]
+    C --> E[target=_blank + rel=noopener noreferrer]
+    D --> E
+    E --> F[Navegador/SO abre la URL]
+    F --> G{"¿Móvil con app de mapas instalada?"}
+    G -->|Sí| H[Se despierta la app nativa con la ruta ya trazada]
+    G -->|No / escritorio| I[Se abre Google Maps en el navegador]
+```
+
+### Justificación de Diseño (UI-DEV)
+
+- **Enlace `<a>`, no botón + `window.open()`, en el popup del mapa:** el popup de Leaflet ya usa un patrón de botón + `addEventListener` para "⭐ Guardar" (`onPopupOpen`, ver más arriba), pero ese patrón existe ahí porque el click necesita ejecutar lógica de Angular (Firestore) tras el evento. "Cómo llegar" no necesita ningún estado de Angular: es navegación pura. Usar un `<a href target="_blank">` deja que el navegador la resuelva sin JavaScript de por medio — cero listeners que registrar, cero riesgo de fuga de memoria o de doble-binding como el que ya se documentó y protegió con `dataset['favBound']` para el botón de favorito.
+- **`ion-button [href]` en el panel de favoritos**, no `(click)="window.open(...)"`: Ionic renderiza `ion-button` como una etiqueta `<a>` real cuando recibe `href` (confirmado en las definiciones de tipos de `@ionic/angular/standalone`), heredando accesibilidad de enlace nativa (foco, "abrir en pestaña nueva" del menú contextual, etc.) sin código imperativo.
+- **`rel="noopener noreferrer"` en los tres sitios** (popup, botón de favoritos): mitigación estándar para cualquier `target="_blank"` — sin esto, la pestaña nueva (Google Maps) tendría acceso a `window.opener` de esta app.
+- **Sin escapado adicional de `lat`/`lng`:** a diferencia de `escapeHtmlAttribute` (usado para `data-station-id`, un string), `lat`/`lng` son siempre `number` — `MitecoService.parseNumero()` descarta cualquier estación cuya latitud/longitud no sea un número válido antes de que llegue a `GasStation[]` (ver `miteco.service.ts`), así que nunca hay texto libre que interpolar en el `href`.
+
+### Verificación
+
+- [x] `npm run lint` — sin avisos.
+- [x] `ng build` — compila sin errores (aviso preexistente y no relacionado sobre `leaflet` no-ESM; aviso nuevo y menor de presupuesto de CSS del panel de favoritos, +382 bytes sobre el límite de aviso de 2 kB, muy por debajo del límite de error de 4 kB).
+
+### Auditoría [REVIEWER]
+
+- [x] **Coste Firebase: cero impacto.** No se añade ninguna lectura/escritura a Firestore ni llamada a MITECO — la URL se construye enteramente con datos ya cargados en memoria (`GasStation`/`Favorite`).
+- [x] **Sin fugas de memoria:** el enlace del popup es un `<a>` plano sin `addEventListener` propio (a diferencia del botón de favorito); no hay nada que limpiar en `ngOnDestroy`. El botón del panel de favoritos es un `ion-button` declarativo estándar, gestionado por el ciclo de vida normal de Angular.
+- [x] **Seguridad:** `rel="noopener noreferrer"` presente en los tres enlaces nuevos. Sin interpolación de texto libre de fuentes externas en el `href` (solo `marca`/`FUEL_LABELS`/números ya validados en el resto del popup, sin cambios en ese aspecto).
+- [x] **No rompe el popup de favorito existente:** `buildDirectionsLinkHtml` se añade como un bloque HTML más dentro de `buildPopupHtml`, sin tocar `buildFavoriteButtonHtml` ni el flujo de `onPopupOpen`/`syncOpenPopupButton`.
+
+### Auditoría [REVIEWER] adicional: orden de coordenadas (lat/lng sin invertir)
+
+Comprobación explícita, de extremo a extremo, de que ninguna capa invierte latitud y longitud (bug clásico y silencioso en integraciones de mapas — sin este chequeo, "Cómo llegar" enviaría al usuario a un punto reflejado del real, y en muchos casos ni siquiera un error visible: solo una ruta a un sitio equivocado):
+
+1. **Origen (`miteco.service.ts:91-92`):** `raw.Latitud → lat`, `raw['Longitud (WGS84)'] → lng`. Nombres de campo de la API de MITECO coinciden con el campo del modelo al que se asignan, sin cruce.
+2. **Propagación a favoritos (`favorites.service.ts:75-76`, `addFavorite`):** `lat: station.lat`, `lng: station.lng` — copia directa campo a campo, sin reordenar.
+3. **Consumo en Leaflet (`map.component.ts`, `L.marker([estacion.lat, estacion.lng], ...)`):** Leaflet espera `[lat, lng]` en ese orden — coincide (y ya estaba en producción antes de este cambio, verificado por los marcadores del mapa mostrándose en las ubicaciones correctas).
+4. **URL nueva (`buildGoogleMapsDirectionsUrl(lat: number, lng: number)`, duplicada en `map.component.ts:77-78` y `favorites-panel.page.ts:48-49`):** firma con `lat` primero y `lng` segundo, interpolada como `destination=${lat},${lng}`. Coincide con el formato documentado por Google (`destination=<lat>,<lng>`, ese orden exacto, cuando se pasan coordenadas en vez de una dirección de texto).
+5. **Puntos de llamada:** `buildDirectionsLinkHtml(estacion.lat, estacion.lng)` (popup) y `buildGoogleMapsDirectionsUrl(favorito.lat, favorito.lng)` (`directionsUrl`, panel de favoritos) — ambos pasan `lat` como primer argumento y `lng` como segundo, en el mismo orden que declara la firma de la función.
+
+**Resultado: sin inversión en ningún punto de la cadena**, desde la respuesta cruda de MITECO hasta la URL final de Google Maps. Verificado por lectura de código en las 5 capas, no solo en el punto de la nueva función.
+
+### Veredicto final
+
+**Aprobado para commit.** Funcionalidad de coste cero (sin llamadas a Firebase ni MITECO), sin nuevos listeners que gestionar, con la mitigación de seguridad estándar (`noopener noreferrer`) aplicada en los tres puntos de entrada nuevos, y con el orden de coordenadas verificado de extremo a extremo sin ninguna inversión.
