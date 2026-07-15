@@ -906,3 +906,67 @@ No se da por buena la confirmación ya escrita por `[ARQUITECTO]` en la sección
 ### Veredicto final
 
 **Aprobado para commit — confirmado, no solo por lectura de código sino de forma empírica end-to-end.** `removeFavorite` ejecuta y espera correctamente la promesa de `deleteDoc`; sus dos consumidores (mapa y panel de favoritos) gestionan esa promesa sin dejar ningún camino sin capturar; y se confirmó con una cuenta de Firebase real que el documento desaparece físicamente de Firestore (leído vía API REST independiente del propio cliente) y que la UI refleja el estado vacío correctamente después.
+
+---
+
+## Formato español de precios (coma decimal)
+
+**Rol:** [UI-DEV]
+**Estado:** Implementado (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivos modificados:**
+- `src/app/shared/components/map/map.component.ts` (popup de gasolinera)
+- `src/app/pages/favorites-panel/favorites-panel.page.html` (tarjeta de favorito)
+- `src/app/components/price-chart-modal/price-chart-modal.component.ts` (tooltip y eje Y del gráfico, `[[07-monitorizacion-historica]]`)
+
+### Qué hace
+
+Todos los precios visibles en la interfaz (popup del mapa, tarjetas del panel de favoritos, tooltip y eje Y del gráfico de histórico) se muestran con **coma como separador decimal** ("1,499 €"), no con el punto que `Number.prototype.toFixed()` produce por defecto ("1.499 €") — formato habitual en España, coherente con cómo ya se muestran los precios en las propias gasolineras/prensa españolas.
+
+### Justificación de Diseño (UI-DEV)
+
+1. **`.toFixed(3).replace('.', ',')`, no `Intl.NumberFormat('es-ES', ...)`.** Ambas opciones producen el mismo resultado para este caso concreto (un número ya con 3 decimales fijos, sin miles que agrupar — los precios de combustible en España nunca llegan a 4 dígitos enteros), pero `Intl.NumberFormat` es una API más pesada semánticamente pensada para localización completa (miles, símbolo de moneda, redondeo bancario...) que esta app no necesita: el precio de un combustible es siempre un número pequeño con exactamente 3 decimales. `.replace('.', ',')` es la solución más simple que resuelve exactamente el problema pedido, sin añadir una dependencia conceptual (locale del navegador, tablas de formato) a algo que es, en la práctica, sustituir un carácter fijo por otro.
+2. **Reemplazo aplicado en cada sitio donde se renderiza el precio (3 lugares), no una función/pipe compartida.** Cada sitio ya construye su propio string de precio de forma distinta (una plantilla literal en `map.component.ts`, una interpolación de Angular en `favorites-panel.page.html`, un callback de Chart.js en `price-chart-modal.component.ts`) — con solo 3 usos y una transformación de una línea (`.replace('.', ',')`), una función/pipe compartida habría añadido un archivo e import nuevos por muy poco beneficio real, mismo criterio de "duplicación pequeña antes que abstracción prematura" ya aplicado repetidamente en este proyecto (`FUEL_LABELS`, `buildGoogleMapsDirectionsUrl`, ambos duplicados 2 veces con la misma justificación).
+3. **Reemplazo en el HTML de Angular (`favorites-panel.page.html`) directamente en la interpolación (`{{ ... }}`), no un pipe personalizado ni un método nuevo en el componente.** `.replace()` es un método nativo de `String`, perfectamente válido dentro de una expresión de plantilla de Angular (que evalúa JavaScript válido) — crear un pipe (`@Pipe`) o un método de componente solo para una llamada de una línea, usada en un único sitio, habría sido la abstracción prematura que el punto anterior ya descarta.
+4. **Extra, no pedido explícitamente pero encontrado al "revisar todos los sitios donde se muestra el precio":** el eje Y del gráfico de histórico (`price-chart-modal.component.ts`) también formatea números y por tanto también podía mostrar precios con punto. Sin un `ticks.callback` explícito, Chart.js formatea los ticks numéricos según el locale del navegador (`Intl.NumberFormat` implícito) — que **no está garantizado que sea español** en el dispositivo de cada usuario. Se añadió el mismo `.replace('.', ',')` como `callback` de los ticks del eje Y, para que el eje sea consistentemente español sin depender de la configuración regional del dispositivo.
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+- **Verificado con Playwright + cuenta de prueba real** (creada y eliminada con la API REST, mismo procedimiento ya usado en ciclos anteriores): confirmado en el DOM real que:
+  1. El popup del mapa muestra `"Gasolina 95: 1,499 €"` — coma presente, sin ningún punto.
+  2. La tarjeta del panel de favoritos muestra `"1,499 €"` — mismo resultado.
+  3. El eje Y del gráfico de histórico muestra los ticks con coma (`"1,580"`, `"1,560"`... confirmado visualmente en captura de pantalla).
+  4. Cero errores de consola.
+- **No verificado visualmente en esta ronda (limitación técnica, no un fallo):** el tooltip de Chart.js se dibuja directamente sobre el `<canvas>` (Canvas 2D API), no como un elemento del DOM con texto extraíble — no se pudo leer su contenido por selector/`innerText` en la verificación automatizada. La corrección de su callback es idéntica línea a línea (`valor.toFixed(3).replace('.', ',')`) a la ya verificada visualmente en el popup y la tarjeta, por lo que se considera de confianza equivalente sin una captura directa del tooltip.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[REVIEWER]:** confirmar que no queda ningún otro sitio...~~ **Hecho, ver auditoría más abajo.**
+
+---
+
+## Auditoría [REVIEWER]: formato español de precios
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/shared/components/map/map.component.ts`
+- `src/app/pages/favorites-panel/favorites-panel.page.html`
+- `src/app/components/price-chart-modal/price-chart-modal.component.ts`
+
+Metodología: releído el código de los 3 sitios + repetido `grep -rn "toFixed\|€" src/` sobre el estado actual del repositorio (no confiar en el barrido ya hecho por `[UI-DEV]` sin repetirlo) + verificación empírica end-to-end con una cuenta de Firebase de prueba real, independiente de la ya realizada en el ciclo anterior.
+
+### 2. ¿Los precios del mapa y del panel de favoritos muestran correctamente la coma (ej. "1,459 €")?
+
+- [x] **`grep -rn "toFixed\|€" src/` repetido sobre el estado actual: exactamente los mismos 3 sitios ya corregidos, ninguno nuevo.** `map.component.ts` (`precio.toFixed(3).replace('.', ',')`), `favorites-panel.page.html` (`item.precioInfo.precio.toFixed(3).replace('.', ',')`), y `price-chart-modal.component.ts` (tooltip + `ticks.callback` del eje Y, ambos con el mismo `.replace('.', ',')`) — sin ningún otro lugar de la app que muestre un precio sin este formato.
+- [x] **Verificación empírica end-to-end (Playwright + cuenta de prueba real, independiente de la ya hecha en el ciclo `[UI-DEV]`):**
+  - Popup del mapa: `"Gasolina 98: 1,759 €"` — coma presente, cero puntos.
+  - Tarjeta del panel de favoritos: `"1,639 €"` — mismo resultado.
+  - Ambos verificados con una expresión regular (`/\d,\d{3}\s?€/` + comprobación explícita de ausencia de `.`), no solo una lectura visual — confirma el patrón exacto "un dígito, coma, tres decimales, símbolo de euro" en ambos sitios.
+- [x] **El precio usado en esta verificación (`1,759`/`1,639`) confirma además que el reemplazo funciona con CUALQUIER dígito entero, no solo con el `1,499` ya probado en el ciclo anterior** — `.replace('.', ',')` sustituye el primer punto literal del string devuelto por `toFixed(3)`, que siempre tiene exactamente un punto (nunca más, al no haber separador de miles en precios de combustible de un solo dígito entero) — no hay caso borde de "varios puntos" que pudiera reemplazarse mal.
+- [x] **Cero errores de consola** durante la verificación.
+
+**Veredicto punto 2: correcto.** Los 3 sitios donde se muestra un precio en la interfaz (confirmado por un `grep` repetido, no solo por confiar en el barrido ya hecho) usan de forma consistente el formato español (coma decimal), verificado empíricamente con dos precios reales distintos del ya probado en el ciclo anterior.
+
+### Veredicto final
+
+**Aprobado para commit.** Ningún sitio de la app muestra ya un precio con punto decimal — los 3 lugares corregidos (popup del mapa, tarjeta de favoritos, tooltip/eje del gráfico de histórico) usan `.replace('.', ',')` de forma consistente, confirmado tanto por búsqueda exhaustiva en el código como por verificación empírica end-to-end con datos reales distintos a los ya probados por `[UI-DEV]`.

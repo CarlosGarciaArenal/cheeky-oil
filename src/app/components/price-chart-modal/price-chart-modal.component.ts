@@ -201,7 +201,17 @@ export class PriceChartModalComponent implements OnInit {
         },
         y: {
           title: { display: true, text: 'Precio (€/L)', color: inkMuted },
-          ticks: { color: inkMuted },
+          // Formato español (coma decimal), no el punto que da `toFixed` por
+          // defecto — mismo criterio ya aplicado al popup del mapa y a las
+          // tarjetas de favoritos (ver `docs/features/06-favoritos.md`).
+          // Sin este `callback`, Chart.js formatea los ticks numéricos según
+          // el locale del navegador (`Intl.NumberFormat` implícito), que no
+          // siempre es español — con esto, el eje es consistente sin
+          // importar el idioma del dispositivo.
+          ticks: {
+            color: inkMuted,
+            callback: (valor) => (typeof valor === 'number' ? valor.toFixed(3).replace('.', ',') : valor),
+          },
           grid: { color: gridColor },
         },
       },
@@ -217,7 +227,7 @@ export class PriceChartModalComponent implements OnInit {
               const valor = context.parsed.y;
               return valor === null || valor === undefined
                 ? `${context.dataset.label}: sin dato ese día`
-                : `${context.dataset.label}: ${valor.toFixed(3)} €`;
+                : `${context.dataset.label}: ${valor.toFixed(3).replace('.', ',')} €`;
             },
           },
         },

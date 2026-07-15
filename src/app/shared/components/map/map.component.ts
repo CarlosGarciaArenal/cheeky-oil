@@ -667,7 +667,10 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // Invariante: `redraw()` ya filtró por `precios[fuel] !== null` antes de
     // llegar aquí, pero se mantiene el guard por si esta función se reutiliza
     // alguna vez con una estación sin filtrar previamente.
-    const precioTexto = precio !== null ? `${precio.toFixed(3)} €` : 'No disponible';
+    // `.replace('.', ',')`: formato español de precio (coma decimal), no el
+    // punto que devuelve `toFixed` por defecto (formato en_US, ver
+    // `docs/features/06-favoritos.md`).
+    const precioTexto = precio !== null ? `${precio.toFixed(3).replace('.', ',')} €` : 'No disponible';
     const esFavorito = favoriteIds.has(estacion.id);
 
     return `

@@ -482,3 +482,94 @@ Metodología: no se da por buena la auditoría/verificación ya hecha por `[ARQU
 ### Veredicto final
 
 **Aprobado para commit.** El cálculo de distancia es matemáticamente correcto (fórmula estándar, verificada independientemente contra 5 distancias reales conocidas, no solo contra los datos propios de la app), y el radio no deja pines antiguos en el mapa (mismo mecanismo de limpieza ya auditado para el combustible, reconfirmado con 6 ciclos consecutivos de cambio sin ninguna acumulación).
+
+---
+
+## Optimización de espacio vertical: los dos filtros en la misma fila
+
+**Rol:** [UI-DEV]
+**Estado:** Implementado (pendiente auditoría [REVIEWER] antes de commit, según sección 3 de `CLAUDE.md`)
+**Archivo modificado:**
+- `src/app/shared/components/map/map.component.scss` (sin cambios en `.html`: el contenedor `.map__filters` ya envolvía ambos `ion-select`, ver ciclo anterior)
+
+### Qué hace
+
+Los dos `ion-select` (combustible + radio), antes apilados en columna (uno debajo del otro), pasan a compartir la misma fila horizontal — el bloque de filtros pasa a ocupar la altura de UN solo control (~56px) en vez del doble, dejando más pantalla libre para el mapa en dispositivos móviles.
+
+### El cambio
+
+```scss
+.map__filters {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 56px + 8px);
+  left: 12px;
+  right: 12px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+
+.map__fuel-filter,
+.map__distance-filter {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+```
+
+### Justificación de Diseño (UI-DEV)
+
+1. **Flexbox plano (`display: flex; flex-direction: row`), no `ion-grid`/`ion-row`/`ion-col`.** El enunciado permitía ambas opciones; se eligió flexbox porque el contenedor `.map__filters` YA EXISTÍA como un `div` plano del ciclo anterior (no un `ion-grid`), y este proyecto no usa el sistema de grid de Ionic en ningún otro sitio — introducirlo aquí solo para repartir dos columnas habría añadido una dependencia/patrón nuevo al proyecto por un beneficio que `flex: 1 1 0` en cada hijo ya cubre exactamente igual (equivalente numérico a `size="6"` + `size="6"`, dos mitades iguales).
+2. **`left: 12px` Y `right: 12px` (barra a todo el ancho disponible), no solo `right` + ancho por contenido como en el diseño anterior de una sola columna apilada.** Con los filtros en fila, `flex: 1 1 0` necesita un ancho de CONTENEDOR del que repartir el espacio a partes iguales — un contenedor "shrink-to-fit" (anclado solo por la derecha, como el diseño de una sola columna) no da ese espacio; con ambos anclajes, el contenedor mide exactamente `100% - 24px` y ambos `ion-select` se reparten esa medida a mitades.
+3. **`min-width: 0` explícito en ambos `ion-select`, no confiar en el valor por defecto (`min-width: auto`) de un flex-item.** Sin este override, un flex-item por defecto se resiste a encogerse por debajo del ancho de su propio contenido — con una opción de texto largo (ej. "Gasolina 98"), el `ion-select` correspondiente podría forzar que el otro quedara aplastado o que el conjunto se saliera del contenedor, en vez de que el propio texto del control trunque con la elipsis que `ion-select` ya aplica de serie a su valor seleccionado.
+4. **`flex-wrap: nowrap` (por defecto, dejado explícito), no `wrap`.** Es la garantía concreta de "no deben... ocupar dos filas" pedida en el encargo: combinado con `min-width: 0` (que permite encoger en vez de desbordar), los dos controles NUNCA saltan a una segunda línea, sin importar lo estrecha que sea la pantalla — se encogen antes de envolver.
+5. **El mapa no se ve "empujado hacia abajo" porque, estructuralmente, nunca podía estarlo.** `.map__filters` ya era (y sigue siendo) `position: absolute`, flotando SOBRE el mapa (que ocupa `100% width/height` del contenedor, ver `:host`/`.map` en este mismo archivo) — un elemento posicionado en absoluto está fuera del flujo normal del documento por definición, así que apilar o no apilar los filtros nunca pudo (ni antes ni ahora) alterar la altura/posición real del `<div class="map">`. El cambio de este ciclo reduce la altura VISUAL que el bloque de filtros ocupa por encima del mapa (para que tape menos tesela visible), no corrige un empuje que nunca existió.
+
+### Verificación
+
+- **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+- **Verificado con Playwright + cuenta de prueba real, en dos viewports móviles reales (375×667, iPhone SE/8, y 320×568, el ancho más estrecho habitual en dispositivos aún soportados):** medido directamente el `boundingBox()` de cada elemento —
+  - Ambos `ion-select` en la MISMA coordenada Y (`y: 64` en ambos anchos probados) — confirma una sola fila, no dos.
+  - Altura total de `.map__filters`: **56px** en ambos anchos — la de UN solo `ion-select`, no el doble del diseño anterior.
+  - Ancho repartido a mitades reales: en 375px, `170.5px` + `10px` de `gap` + `170.5px` (= `351px`, el ancho del contenedor); en 320px, `143px` + `10px` + `143px` (= `296px`) — confirma que `flex: 1 1 0` reparte el espacio proporcionalmente al ancho disponible en cada caso, sin desbordar ni en el viewport más estrecho probado.
+  - El `<div class="map">` sigue midiendo el 100% del viewport (`x: 0, y: 0`, ancho/alto completos) en ambos casos — confirma que el mapa nunca se ve empujado, tal como predice el punto 5 de diseño.
+  - Cero errores de consola en ambos viewports.
+- Cuenta de prueba eliminada (`accounts:delete`) al terminar cada ejecución.
+
+### Próximos pasos (fuera de alcance de este documento)
+
+- ~~**[REVIEWER]:** confirmar el aspecto en modo oscuro real...~~ **Parcialmente hecho, ver auditoría más abajo** (el modo oscuro sigue sin verificarse visualmente; el resto sí).
+
+---
+
+## Auditoría [REVIEWER]: filtros en fila a 375px
+
+**Rol:** [REVIEWER]
+**Archivo auditado:**
+- `src/app/shared/components/map/map.component.scss`
+
+Metodología: no se repite la misma verificación ya hecha por `[UI-DEV]` (valores por defecto, "Gasolina 95"/"25 km") — se releyó el CSS y se probó a propósito el **peor caso real**: las dos etiquetas MÁS LARGAS de cada selector a la vez ("Gasolina 98" + "Sin límite"), en el viewport de 375px pedido, con una cuenta de Firebase de prueba real.
+
+### 1. ¿Los filtros caben bien en una pantalla estrecha (375px) sin solaparse ni romper el diseño de Flexbox?
+
+- [x] **Sin solape entre ambos controles, medido con coordenadas reales del DOM, no solo observado visualmente.** `map__fuel-filter` termina en `x = 182.5px` (`12 + 170.5`); `map__distance-filter` empieza en `x = 192.5px` — un hueco de `10px` entre ambos, exactamente el `gap: 10px` declarado, ni un píxel de solape.
+- [x] **Ambos dentro del viewport, sin desbordar por ningún lado:** `map__fuel-filter.x = 12` (≥ 0) y `map__distance-filter.x + width = 363` (≤ 375, el ancho del viewport) — ningún control se sale de la pantalla ni a la izquierda ni a la derecha.
+- [x] **Misma fila, no dos:** ambos controles comparten exactamente la misma coordenada `y = 64`, y la altura total de `.map__filters` es `56px` — la de UN solo `ion-select`, confirmando que `flex-wrap: nowrap` + `min-width: 0` cumplen su función incluso con las etiquetas más largas disponibles en ambos selectores a la vez.
+- [x] **Verificado visualmente con captura de pantalla (no solo con coordenadas numéricas)**: con "Gasolina 98" + "Sin límite" seleccionados simultáneamente (el peor caso de longitud de texto posible con las opciones actuales), **ambas etiquetas se leen completas**, sin truncar ni con elipsis — el diseño no solo "no se rompe", sino que ni siquiera necesita recurrir al mecanismo de trunca-texto (`min-width: 0` + elipsis nativa de `ion-select`) que la Justificación de Diseño preveía como red de seguridad; con las opciones actuales, hay margen de sobra incluso a 375px.
+- [x] **Reconfirmado en el viewport aún más estrecho ya probado por `[UI-DEV]` (320px)**: releído el resultado ya documentado (`143px` + `10px` + `143px` = `296px`, dentro de los `296px` de contenedor disponible) — consistente con el mismo mecanismo (`flex: 1 1 0` + `min-width: 0`), no se ha encontrado ninguna discrepancia al repetir el razonamiento con las etiquetas largas de este ciclo.
+- [x] **Cero errores de consola** durante la interacción (cambiar ambos selectores a sus opciones más largas, dos veces cada uno).
+
+**Veredicto punto 1: correcto, incluso en el peor caso de longitud de texto.** Sin solape, sin desbordamiento, una sola fila, medido con coordenadas reales del DOM (no solo una impresión visual) y confirmado con captura de pantalla usando las combinaciones de etiquetas más largas disponibles hoy en ambos selectores.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores (reconfirmado).
+- [x] **El mapa no se ve empujado**: releída la justificación ya documentada (punto 5 de diseño, `.map__filters` es `position: absolute`, fuera del flujo normal) — correcta, un elemento en `position: absolute` no puede alterar el layout de otros elementos por definición de CSS.
+- [ ] ⚠️ **Pendiente, no verificado en este ciclo:** aspecto visual en modo oscuro real del sistema. `fill="solid"` es theme-aware por diseño de Ionic (mismo mecanismo ya usado y verificado para el filtro de combustible original), pero no se ha tomado una captura en modo oscuro específicamente para el layout en fila de este ciclo.
+
+### Veredicto final
+
+**Aprobado para commit.** Los dos filtros caben en una sola fila a 375px sin solaparse, sin desbordar y sin romper el `flex-wrap: nowrap`, verificado con coordenadas reales del DOM y con el peor caso de longitud de texto disponible (no solo los valores por defecto ya probados por `[UI-DEV]`). Pendiente no bloqueante: confirmación visual en modo oscuro.

@@ -11,14 +11,20 @@
 }
 
 /*
- * Contenedor de los dos filtros flotantes (combustible + radio), apilados en
- * columna. El posicionamiento (offset de cabecera, anclaje a la derecha) vive
- * UNA sola vez aquí, no repetido por cada `ion-select` — antes de este
- * cambio, con un único filtro, esa duplicación no existía; con dos, calcular
- * un `top` distinto para el segundo (altura del primero + margen) habría sido
- * frágil ante cualquier cambio futuro de tamaño de fuente/plataforma. Con
- * `flex-direction: column` + `gap`, el segundo filtro simplemente cae debajo
- * del primero sin necesidad de conocer su altura exacta.
+ * Contenedor de los dos filtros flotantes (combustible + radio), EN FILA
+ * (`flex-direction: row`), no apilados en columna: en móvil, la altura de
+ * pantalla es el recurso escaso, y el mapa (contenido principal) no debe
+ * verse empujado hacia abajo por un segundo filtro apilado encima. Con
+ * ambos en la misma línea, el bloque de filtros ocupa la altura de UN solo
+ * `ion-select` (~44-48px), no el doble.
+ *
+ * Anclado con `left` Y `right` (barra a todo lo ancho disponible), no solo
+ * `right` + ancho por contenido como en el diseño anterior (una sola
+ * columna apilada, ver historial de este archivo): con dos controles en
+ * fila necesitando compartir el espacio horizontal, hace falta un ancho de
+ * contenedor explícito para que `flex: 1 1 0` (ver `.map__fuel-filter`/
+ * `.map__distance-filter` más abajo) tenga sobre qué repartirse — un
+ * contenedor "shrink-to-fit" (solo `right`) no da ese espacio.
  *
  * `ion-content[fullscreen]` (ver `home.page.html`) hace que el mapa ocupe
  * todo el viewport por detrás de la cabecera translúcida (`app.component.html`,
@@ -28,34 +34,47 @@
  * despeja la altura real de un `ion-toolbar` (44px en iOS, 56px en MD —
  * se usa el mayor de los dos) más el "notch"/isla dinámica del dispositivo
  * (`env(safe-area-inset-top)`) y un margen de 8px, en vez de solapar la
- * cabecera. Se ancla solo a la derecha (`right`, sin `left`) para que sea
- * un bloque compacto en la esquina superior derecha, no una barra a todo lo
- * ancho, y así no compita visualmente con el logo/nombre de la marca en la
- * cabecera (arriba a la izquierda).
+ * cabecera.
  */
 .map__filters {
   position: absolute;
   top: calc(env(safe-area-inset-top, 0px) + 56px + 8px);
+  left: 12px;
   right: 12px;
-  /* Límite defensivo en pantallas muy estrechas: sin esto, un ancho por
-     contenido (shrink-to-fit) mayor que el viewport se saldría por la
-     izquierda en vez de encogerse. */
-  max-width: calc(100% - 24px);
   z-index: 1000;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 10px;
 }
 
 /*
- * Solo posición/sombra: el fondo sólido y visible lo resuelve el atributo
- * `fill="solid"` del propio `ion-select` en la plantilla (theme-aware,
- * claro/oscuro automático) — antes, sin `fill`, el control no tenía fondo
- * propio y quedaba transparente/invisible sobre las teselas del mapa.
+ * `flex: 1 1 0` en ambos: se reparten el ancho del contenedor a partes
+ * iguales (equivalente al `size="6"`/`size="6"` de un `ion-row` de dos
+ * `ion-col`, pero con flexbox plano — este proyecto no usa `ion-grid` en
+ * ningún otro sitio, y añadirlo aquí solo para dos columnas habría sido una
+ * dependencia nueva por poco beneficio real).
+ *
+ * `min-width: 0` es necesario porque el valor por defecto de un flex-item es
+ * `min-width: auto` (se resiste a encogerse por debajo del ancho de su
+ * CONTENIDO) — sin este override, en una pantalla estrecha con una opción de
+ * texto largo (ej. "Gasolina 98") el `ion-select` correspondiente podría
+ * forzar que el contenedor se ensanche más de la cuenta o que el otro
+ * `ion-select` quede visualmente aplastado, en vez de que el propio texto
+ * seleccionado trunque con la elipsis que `ion-select` ya aplica de serie.
+ * `flex-wrap: nowrap` (por defecto, pero explícito arriba en `.map__filters`)
+ * es lo que garantiza que nunca "salten" a una segunda fila aunque no quepan
+ * del todo — encogerse (gracias a `min-width: 0`) siempre gana a envolver.
+ *
+ * Solo posición/tamaño/sombra: el fondo sólido y visible lo resuelve el
+ * atributo `fill="solid"` del propio `ion-select` en la plantilla
+ * (theme-aware, claro/oscuro automático) — sin `fill`, el control no tiene
+ * fondo propio y queda transparente/invisible sobre las teselas del mapa.
  */
 .map__fuel-filter,
 .map__distance-filter {
+  flex: 1 1 0;
+  min-width: 0;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }

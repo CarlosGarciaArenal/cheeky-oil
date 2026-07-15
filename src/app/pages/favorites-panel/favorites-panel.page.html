@@ -97,7 +97,7 @@
                     <ion-spinner name="dots" aria-label="Cargando precio..."></ion-spinner>
                   </span>
                 } @else if (item.precioInfo.precio !== null) {
-                  {{ item.precioInfo.precio.toFixed(3) }} €
+                  {{ item.precioInfo.precio.toFixed(3).replace('.', ',') }} €
                 } @else {
                   <span class="favorite-card__precio--indisponible">Precio no disponible</span>
                 }
