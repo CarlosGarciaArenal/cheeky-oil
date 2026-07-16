@@ -10,6 +10,7 @@ import {
   signal,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import {
   InputCustomEvent,
@@ -125,6 +126,7 @@ const ROUTE_LINE_WEIGHT = 6;
   styleUrl: './route-planner.page.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    FormsModule,
     RouterLink,
     IonButton,
     IonContent,
@@ -322,6 +324,17 @@ export class RoutePlannerPage implements AfterViewInit, OnDestroy {
    * sin resultados, OSRM sin ruta, red caída) se captura en un único
    * `catch` y se muestra como `errorMessage` — el usuario nunca ve un error
    * técnico sin traducir.
+   *
+   * `console.log`/`console.time` por fase (RF faltante, a petición explícita
+   * para auditar rendimiento): cada paso de este método puede, por sí solo,
+   * costar de milisegundos a varios segundos (geocodificación/OSRM son APIs
+   * externas; `filterStationsAlongRoute` es cálculo local sobre ~11.500
+   * estaciones, ver `[[09-rutas]]`) — sin estas marcas, un tiempo total lento
+   * no dice CUÁL de las 4 fases es la culpable. `console.time`/`console.timeEnd`
+   * con la MISMA etiqueta literal miden el total de principio a fin,
+   * incluidos los `catch`/`finally` (por eso `timeEnd` vive en `finally`, no
+   * al final del `try`: un fallo a mitad de camino también debe quedar
+   * medido, no solo el camino feliz).
    */
   protected async calculateRoute(): Promise<void> {
     if (this.calculating()) {
@@ -337,11 +350,19 @@ export class RoutePlannerPage implements AfterViewInit, OnDestroy {
     this.matchedStationsCount.set(null);
     this.clearRouteLayers();
 
+    console.time('[RoutePlanner] calculateRoute total');
     try {
+      console.log('[RoutePlanner] 1. Buscando coordenadas de origen/destino...');
       const [origen, destino] = await Promise.all([this.resolveOrigin(), this.resolveDestination()]);
+      console.log('[RoutePlanner] 1. Coordenadas resueltas:', { origen, destino });
 
+      console.log('[RoutePlanner] 2. Trazando ruta OSRM...');
       const ruta = await firstValueFrom(this.routingService.getRoute(origen, destino));
+      console.log(
+        `[RoutePlanner] 2. Ruta calculada: ${(ruta.distanceMeters / 1000).toFixed(1)} km, ${ruta.geometry.coordinates.length} vértices.`,
+      );
 
+      console.log('[RoutePlanner] 3. Filtrando con Turf.js...');
       const estaciones = await firstValueFrom(this.mitecoService.getEstaciones());
       const conCombustible = estaciones.filter((estacion) => estacion.precios[this.selectedFuel()] !== null);
       const cercanas = this.routingService.filterStationsAlongRoute(
@@ -349,13 +370,21 @@ export class RoutePlannerPage implements AfterViewInit, OnDestroy {
         conCombustible,
         this.maxDeviationKm(),
       );
+      console.log(
+        `[RoutePlanner] 3. ${cercanas.length} gasolineras dentro de ${this.maxDeviationKm()} km ` +
+          `(de ${estaciones.length} totales, ${conCombustible.length} con ${this.selectedFuel()}).`,
+      );
 
+      console.log('[RoutePlanner] 4. Dibujando en el mapa...');
       this.drawRoute(ruta.geometry, origen, destino);
       this.drawStations(cercanas);
       this.matchedStationsCount.set(cercanas.length);
+      console.log('[RoutePlanner] 4. Dibujado completo.');
     } catch (error: unknown) {
+      console.error('[RoutePlanner] Error calculando la ruta:', error);
       this.errorMessage.set(error instanceof Error ? error.message : 'No se ha podido calcular la ruta.');
     } finally {
+      console.timeEnd('[RoutePlanner] calculateRoute total');
       this.calculating.set(false);
     }
   }

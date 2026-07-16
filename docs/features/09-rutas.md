@@ -254,3 +254,40 @@ Metodología: petición real a Nominatim (`curl`) contra una búsqueda sin resul
 ### Veredicto final
 
 **Aprobado para commit.** (1) El manejo de "destino no encontrado" es correcto, específico y accesible, confirmado contra el servidor real de Nominatim (no solo la documentación) — con un hallazgo secundario no bloqueante sobre mensajes genéricos ante fallos de red (caso distinto al preguntado). (2) Añadir un favorito desde Rutas se apoya en la misma infraestructura de Firestore/`FavoritesService` ya auditada y verificada empíricamente en `[[06-favoritos]]`, y el cableado de sincronización de icono, comparado línea a línea contra `MapComponent`, es estructuralmente equivalente sin discrepancias — con la salvedad explícita de que esta pantalla concreta no se ha vuelto a verificar con Playwright/cuenta de prueba real en este ciclo, por falta de credenciales.
+
+---
+
+## Auditoría [REVIEWER]: corrección de la recarga de página al calcular ruta
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/pages/route-planner/route-planner.page.ts` (`imports`, `calculateRoute`)
+- `src/app/pages/route-planner/route-planner.page.html` (`<form (ngSubmit)>`, botón `type="submit"`)
+- `node_modules/@angular/forms/fesm2022/forms.mjs` (`NgForm.onSubmit`, para confirmar el mecanismo real, no solo la documentación)
+- `node_modules/@angular/core/fesm2022/debug_node.mjs` (`wrapListenerIn_markDirtyAndPreventDefault`, el mecanismo real de Angular que traduce "el handler devuelve `false`" en `event.preventDefault()`)
+
+Metodología: a diferencia de la auditoría anterior de este documento (sin credenciales, apoyada en lectura de código), esta pregunta SÍ se verificó de extremo a extremo contra el código real en un navegador real (Playwright), con llamadas de red reales a Nominatim/OSRM/MITECO — sin necesitar sesión autenticada, porque `calculateRoute()` no depende de Firebase (solo el botón de favorito DENTRO de un popup ya dibujado lo necesita, y no se llegó a probar ese sub-flujo aquí). Para alcanzar la pantalla sin credenciales, se añadió una ruta temporal SIN `authGuard` (`/rutas-test-reviewer`, apuntando al mismo `RoutePlannerPage`) solo en el árbol de trabajo local, se ejecutó la prueba, y se revirtió con `git checkout` antes de terminar la auditoría — nunca llegó a estar en un commit ni en el diff final.
+
+### 1. ¿El botón de cálculo ya no refresca la página y ejecuta la función asíncrona correctamente?
+
+- [x] **Mecanismo de la corrección, confirmado a nivel de código fuente de Angular (no solo por la documentación pública):** `NgForm.onSubmit($event)` (`forms.mjs`) devuelve `$event?.target?.method === 'dialog'` — `false` para un formulario normal — y el wrapper real de Angular para listeners de plantilla (`wrapListenerIn_markDirtyAndPreventDefault`, `debug_node.mjs`, con el comentario explícito "we should prevent default if any of the listeners explicitly return false") es quien llama a `event.preventDefault()` en ese caso. `NgForm` solo se activa sobre un `<form>` si `FormsModule` está en los `imports` del componente — confirmado que ahora lo está (`route-planner.page.ts`).
+- [x] **Verificado en un navegador real, de extremo a extremo, con datos reales — no una suposición ni un mockup aislado.** Se cargó `RoutePlannerPage` (vía la ruta temporal sin guard), se rellenó Origen="Puerta del Sol, Madrid" / Destino="Plaza Catalunya, Barcelona", y se pulsó "Calcular Ruta" con un listener de `framenavigated` ya armado ANTES del click:
+  - **0 eventos `framenavigated` nuevos disparados por el click** (los 2 únicos del test correspondían a la carga inicial de la página, ninguno posterior).
+  - **`page.url()` idéntica antes y después del click** — sin recarga, sin navegación, sin cambio de query string.
+- [x] **La función asíncrona `calculateRoute()` se ejecutó de principio a fin, confirmado por los 4 `console.log` de fase apareciendo en orden, con datos reales y coherentes:** geocodificación resuelta, ruta OSRM de 616,8 km / 8.160 vértices (cifra consistente con la ruta Madrid-Barcelona ya medida en el ciclo [ARQUITECTO], `~8.157` vértices, con la pequeña diferencia esperada por el punto exacto de Puerta del Sol/Plaza Catalunya usado en esta prueba frente a las coordenadas fijas del benchmark original), filtrado con Turf.js (**483 gasolineras** de 11.475 totales, 10.903 con gasolina95, dentro de 3 km de la ruta), y dibujado completo — **`console.timeEnd` midió 6.446 ms el flujo completo** (dato real de rendimiento, no estimado).
+- [x] **El resultado se refleja correctamente en el DOM**, no solo en la consola: el elemento `.route-planner__results-count` muestra "483 gasolineras encontradas cerca de tu ruta." — coincide EXACTAMENTE con la cifra de Turf.js del paso 3, confirmando que `matchedStationsCount` y el pintado del mapa (`drawStations`) están conectados correctamente al resultado real del cálculo, no solo que el cálculo en sí "no falla".
+- [x] **Cero errores de consola durante todo el flujo** (geocodificación, OSRM, descarga de MITECO, filtrado, dibujado).
+- [x] **La ruta temporal usada para esta prueba (`/rutas-test-reviewer`) se revirtió limpiamente con `git checkout -- src/app/app.routes.ts`** antes de dar la auditoría por terminada — confirmado con `git diff --stat` que el único cambio real en el árbol de trabajo son los dos archivos de la corrección (`route-planner.page.ts`/`.html`), nada de infraestructura de prueba.
+
+**Veredicto punto 1: confirmado de extremo a extremo, con evidencia empírica real, no solo razonamiento sobre el mecanismo.** El botón "Calcular Ruta" ya no provoca ninguna recarga/navegación (0 eventos `framenavigated`, URL idéntica), y `calculateRoute()` se ejecuta correctamente hasta el final, con resultados reales y coherentes reflejados tanto en consola como en el DOM.
+
+### Otras comprobaciones (sección 3 de `CLAUDE.md`)
+
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores.
+- [x] **Sin fugas de memoria ni cambios de comportamiento fuera del formulario/logs** — el diff se limita a `imports: [FormsModule, ...]`, un comentario HTML explicativo, y los `console.log`/`console.time` dentro de `calculateRoute()`.
+- [x] **Sin APIs de pago ni credenciales nuevas.** Los `console.log` añadidos no exponen ningún secreto (coordenadas de origen/destino ya visibles para el propio usuario en los campos del formulario, conteos de estaciones, duración) — aceptable para logs de depuración en desarrollo.
+- [x] **Ninguna infraestructura de prueba temporal quedó en el árbol de trabajo** tras la auditoría (ruta temporal revertida, script de prueba eliminado).
+
+### Veredicto final
+
+**Aprobado para commit.** La corrección de la recarga de página (import de `FormsModule`) queda confirmada de extremo a extremo con una prueba real en navegador: cero eventos de navegación provocados por el click, `calculateRoute()` completa sus 4 fases con datos reales y consistentes, el resultado se refleja correctamente en el DOM, y no hay ningún error de consola. Sin hallazgos bloqueantes.

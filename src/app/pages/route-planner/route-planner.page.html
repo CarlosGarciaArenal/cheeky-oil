@@ -14,6 +14,18 @@
 
     <h1 class="route-planner__title">Planificador de Rutas</h1>
 
+    <!--
+      CORRECCIÓN [UI-DEV]: `(ngSubmit)` solo lo intercepta `NgForm`
+      (`FormsModule`, ver `route-planner.page.ts`) — sin ese módulo
+      importado, este `<form>` no tenía NINGÚN directiva escuchando su
+      evento nativo `submit`, así que el botón "Calcular Ruta"
+      (`type="submit"`, más abajo) disparaba el envío HTML por defecto del
+      navegador (recarga completa de la SPA) en vez de llamar a
+      `calculateRoute()`. `NgForm.onSubmit()` (ver `node_modules/@angular/forms`)
+      devuelve `false` para un formulario normal, que Angular interpreta como
+      "haz `preventDefault()`" — con `FormsModule` importado, esto ya
+      funciona correctamente sin tocar la plantilla.
+    -->
     <form class="route-planner__form" (ngSubmit)="calculateRoute()" novalidate>
       <ion-list class="route-planner__list" lines="full">
         <ion-item class="route-planner__origin-item">
