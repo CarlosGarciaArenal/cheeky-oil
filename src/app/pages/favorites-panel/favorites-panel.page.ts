@@ -4,6 +4,8 @@ import { NgClass } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import {
   IonButton,
+  IonCard,
+  IonCardContent,
   IonContent,
   IonIcon,
   IonSelect,
@@ -14,14 +16,26 @@ import {
   SelectCustomEvent,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { arrowBackOutline, medalOutline, statsChartOutline, trashOutline, trendingUpOutline } from 'ionicons/icons';
+import {
+  alertCircleOutline,
+  arrowBackOutline,
+  medalOutline,
+  statsChartOutline,
+  thumbsUpOutline,
+  trashOutline,
+  trendingUpOutline,
+  warningOutline,
+} from 'ionicons/icons';
 import { catchError, combineLatest, firstValueFrom, map, of, shareReplay, switchMap, tap } from 'rxjs';
 
 import { PriceChartModalComponent, PriceChartStation } from '../../components/price-chart-modal/price-chart-modal.component';
 import { FuelType, GasStation } from '../../core/models/gas-station.model';
 import { Favorite, FavoriteWithPrice } from '../../core/models/favorite.model';
+import { PriceHistoryPoint } from '../../core/models/price-history.model';
+import { RefuelAdvice, RefuelAdviceStatus } from '../../core/models/refuel-advice.model';
 import { FavoritesService } from '../../core/services/favorites.service';
 import { MitecoService } from '../../core/services/miteco.service';
+import { RefuelAdvisorService } from '../../core/services/refuel-advisor.service';
 
 /**
  * Id "sentinela" para `loadingHistoryId` cuando el botón en curso es el
@@ -44,6 +58,18 @@ const FUEL_LABELS: Record<FuelType, string> = {
   gasolina95: 'Gasolina 95',
   gasolina98: 'Gasolina 98',
   diesel: 'Diésel',
+};
+
+/**
+ * Icono por estado del "Semáforo de Repostaje" (`[[08-semaforo-repostaje]]`).
+ * 3 iconos de FORMA distinta (pulgar, triángulo, círculo), no solo de color:
+ * el color por sí solo no es un canal fiable para daltonismo (mismo criterio
+ * ya exigido por la skill de dataviz para la gráfica de `[[07-monitorizacion-historica]]`).
+ */
+const REFUEL_ADVICE_ICONS: Record<RefuelAdviceStatus, string> = {
+  GREEN: 'thumbs-up-outline',
+  YELLOW: 'warning-outline',
+  RED: 'alert-circle-outline',
 };
 
 /** `FuelType` no tiene un valor "por defecto" propio (es un `keyof`); se fija aquí el mismo criterio que ya usa `MapComponent`. */
@@ -83,6 +109,8 @@ function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localid
     NgClass,
     RouterLink,
     IonButton,
+    IonCard,
+    IonCardContent,
     IonContent,
     IonIcon,
     IonSelect,
@@ -94,6 +122,7 @@ function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localid
 export class FavoritesPanelPage {
   private readonly favoritesService = inject(FavoritesService);
   private readonly mitecoService = inject(MitecoService);
+  private readonly refuelAdvisorService = inject(RefuelAdvisorService);
   private readonly modalController = inject(ModalController);
   private readonly destroyRef = inject(DestroyRef);
 
@@ -124,6 +153,23 @@ export class FavoritesPanelPage {
    */
   protected readonly preciosPorId = signal<Map<string, FavoriteWithPrice> | null>(null);
 
+  /**
+   * "Semáforo de Repostaje" (`[[08-semaforo-repostaje]]`) del combustible
+   * seleccionado, o `null` mientras `RefuelAdvisorService.getRefuelAdvice(...)`
+   * todavía no ha calculado un resultado para el `selectedFuel`/`favoritos`
+   * vigentes (carga inicial, o justo tras cambiar de combustible — ver el
+   * stream que lo alimenta en el constructor, que lo resetea a `null` a
+   * propósito en cuanto cambia cualquiera de los dos, mismo criterio que
+   * `preciosPorId` con `isLoading`).
+   */
+  protected readonly refuelAdvice = signal<RefuelAdvice | null>(null);
+
+  /** Icono por estado, para la plantilla — ver `REFUEL_ADVICE_ICONS`. `null` mientras `refuelAdvice` es `null` (estado de carga, sin icono todavía). */
+  protected readonly refuelAdviceIcon = computed(() => {
+    const status = this.refuelAdvice()?.status;
+    return status ? REFUEL_ADVICE_ICONS[status] : null;
+  });
+
   /** `id` del favorito cuyo botón "Quitar" está esperando la respuesta de Firestore (deshabilita SOLO ese botón, no toda la lista). */
   protected readonly removingId = signal<string | null>(null);
 
@@ -150,7 +196,16 @@ export class FavoritesPanelPage {
   });
 
   constructor() {
-    addIcons({ arrowBackOutline, medalOutline, statsChartOutline, trashOutline, trendingUpOutline });
+    addIcons({
+      alertCircleOutline,
+      arrowBackOutline,
+      medalOutline,
+      statsChartOutline,
+      thumbsUpOutline,
+      trashOutline,
+      trendingUpOutline,
+      warningOutline,
+    });
 
     // `shareReplay({ bufferSize: 1, refCount: true })`: los dos usos de abajo
     // (la lista rápida, y el cruce con precios) necesitan los MISMOS datos de
@@ -262,6 +317,58 @@ export class FavoritesPanelPage {
         // escribir el histórico nunca puede afectar a los precios ya
         // mostrados en pantalla.
         void this.favoritesService.recordTodayHistory(favoritos, estaciones);
+      });
+
+    // Semáforo de repostaje (`[[08-semaforo-repostaje]]`): combina la MISMA
+    // `favoritos$` de arriba (reutilizada, no una tercera llamada a
+    // `getFavorites()`) con `selectedFuel` para pedir el histórico de 30 días
+    // de TODAS las favoritas (`FavoritesService.getHistory`, hasta 300
+    // lecturas en el peor caso — 10 favoritas × 30 días, ya analizado en
+    // `[[07-monitorizacion-historica]]`) y calcular
+    // `RefuelAdvisorService.getRefuelAdvice(...)` sobre el resultado.
+    //
+    // Stream independiente, no anidado dentro del `combineLatest` de arriba:
+    // mismo criterio ya aplicado a `estacionesPorFuel$` — cada stream de este
+    // constructor sirve un propósito propio (lista rápida / cruce de precios
+    // MITECO / semáforo), y mezclarlos obligaría a repetir el trabajo de uno
+    // cada vez que cambia la señal del otro sin ninguna relación real.
+    //
+    // `tap` reseteando `refuelAdvice` a `null` ANTES del `switchMap`: mismo
+    // motivo que `preciosPorId.set(null)` en `estacionesPorFuel$` — sin esto,
+    // el semáforo seguiría mostrando el color/mensaje del combustible
+    // ANTERIOR mientras se resuelve la nueva consulta a Firestore.
+    //
+    // `switchMap`, no `mergeMap`: si el usuario cambia de combustible con la
+    // consulta anterior todavía en vuelo, cancela esa consulta obsoleta en
+    // vez de dejar que ambas resuelvan y se pisen entre sí.
+    //
+    // `catchError` DENTRO del `switchMap` interno: un fallo de red al leer el
+    // histórico no debe matar esta suscripción entera (dejaría el semáforo
+    // congelado en su último valor para el resto de la sesión) — se degrada
+    // a un `Map` vacío, que `getRefuelAdvice` ya interpreta como "datos
+    // insuficientes" (YELLOW), el mismo estado neutro que ya usa para
+    // cualquier otro caso de histórico incompleto.
+    //
+    // Coste explícito, distinto del resto de esta página: hasta 300 lecturas
+    // CADA VEZ que cambian `favoritos`/`selectedFuel`, de forma AUTOMÁTICA (a
+    // diferencia de `openHistoryModal`, bajo demanda solo al pulsar un
+    // botón) — pendiente señalado en `[[08-semaforo-repostaje]]` para una
+    // futura auditoría [REVIEWER]/[ARQUITECTO]: valorar si merece la pena
+    // unificar esta consulta con la del botón "Ver evolución general" (misma
+    // `ideessList`/`fuelType`/30 días) para no pagarla dos veces si el
+    // usuario abre esa gráfica en la misma sesión.
+    combineLatest([favoritos$, toObservable(this.selectedFuel)])
+      .pipe(
+        tap(() => this.refuelAdvice.set(null)),
+        switchMap(([favoritos, fuel]) =>
+          this.favoritesService.getHistory(favoritos.map((favorito) => favorito.id), fuel, 30).pipe(
+            catchError(() => of(new Map<string, PriceHistoryPoint[]>())),
+          ),
+        ),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((historial) => {
+        this.refuelAdvice.set(this.refuelAdvisorService.getRefuelAdvice(historial));
       });
   }
 

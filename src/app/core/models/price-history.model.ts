@@ -21,10 +21,12 @@ export interface PriceHistoryDoc {
 }
 
 /**
- * Punto de histórico ya combinado con su fecha (extraída de `doc.id`), tal
- * como lo devuelve `FavoritesService.getHistory()` a sus consumidores
- * (ej. una gráfica `ng2-charts`). Nunca se persiste con esta forma exacta —
- * en Firestore solo vive `PriceHistoryDoc.price`.
+ * Punto de histórico ya combinado con su fecha (extraída de `doc.id`) y
+ * filtrado a un único `FuelType` (extraído de `PriceHistoryDoc.prices`), tal
+ * como lo devuelve `FavoritesService.getHistory()` a sus consumidores (ej.
+ * una gráfica `ng2-charts`, o `RefuelAdvisorService.getRefuelAdvice`, ver
+ * `[[08-semaforo-repostaje]]`). Nunca se persiste con esta forma exacta — en
+ * Firestore solo vive `PriceHistoryDoc.prices`.
  */
 export interface PriceHistoryPoint {
   /** `YYYY-MM-DD`, igual al id del documento en Firestore. */

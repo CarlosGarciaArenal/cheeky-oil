@@ -25,6 +25,35 @@
 
     <h1 class="favorites-panel__title">Mis gasolineras favoritas</h1>
 
+    @if (favoritos().length > 0) {
+      <ion-card
+        class="refuel-advice"
+        [ngClass]="{
+          'refuel-advice--green': refuelAdvice()?.status === 'GREEN',
+          'refuel-advice--yellow': refuelAdvice()?.status === 'YELLOW',
+          'refuel-advice--red': refuelAdvice()?.status === 'RED',
+        }"
+        role="status"
+        aria-live="polite"
+      >
+        <ion-card-content class="refuel-advice__content">
+          @if (refuelAdvice() === null) {
+            <ion-spinner name="dots" aria-hidden="true"></ion-spinner>
+            <p class="refuel-advice__message">Analizando tus precios habituales...</p>
+          } @else {
+            <ion-icon class="refuel-advice__icon" [name]="refuelAdviceIcon()" aria-hidden="true"></ion-icon>
+            <div class="refuel-advice__body">
+              <p class="refuel-advice__heading">
+                Semáforo de repostaje
+                <span class="refuel-advice__fuel">· {{ fuelLabels[selectedFuel()] }}</span>
+              </p>
+              <p class="refuel-advice__message">{{ refuelAdvice()!.message }}</p>
+            </div>
+          }
+        </ion-card-content>
+      </ion-card>
+    }
+
     <ion-select
       class="favorites-panel__fuel-filter"
       fill="outline"
