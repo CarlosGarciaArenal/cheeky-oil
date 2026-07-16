@@ -19,6 +19,7 @@ import { FuelPrices, GasStation } from '../../../core/models/gas-station.model';
 import { Coordinates, LocationService } from '../../../core/services/location.service';
 import { FavoritesService } from '../../../core/services/favorites.service';
 import { MitecoService } from '../../../core/services/miteco.service';
+import { FAV_BUTTON_CLASS, FAVORITE_ICON, STATION_ICON, buildGasStationPopupHtml } from './gas-station-popup';
 
 /** Centro por defecto (Madrid) mientras se resuelve o si falla la geolocalización. */
 const DEFAULT_CENTER: L.LatLngTuple = [40.4168, -3.7038];
@@ -86,53 +87,6 @@ const DISTANCE_OPTIONS: DistanceOption[] = [
 /** Radio por defecto al cargar el mapa: suficientemente amplio para casi cualquier zona sin llegar a "sin límite". */
 const DEFAULT_MAX_DISTANCE_KM = 25;
 
-/** Clase CSS del botón de favorito dentro del popup (ver `global.scss`), usada tanto al construir el HTML como al localizar el botón vía `querySelector` en `onPopupOpen`. */
-const FAV_BUTTON_CLASS = 'gas-station-popup__fav-btn';
-
-/** Clase CSS del enlace "Cómo llegar" del popup (ver `global.scss`). Es un `<a>` plano: a diferencia del botón de favorito, no necesita `onPopupOpen`/`addEventListener` porque no hay ningún estado de Angular que sincronizar — el navegador gestiona la navegación él solo. */
-const DIRECTIONS_LINK_CLASS = 'gas-station-popup__directions-link';
-
-/**
- * URL universal de Google Maps para trazar ruta hasta una gasolinera (sin
- * API key, sin coste): en móvil, el propio sistema operativo despierta la
- * app nativa de mapas que el usuario tenga instalada; en escritorio abre
- * Google Maps en el navegador.
- *
- * CORRECCIÓN CRÍTICA [ARQUITECTO] (RF-04): enruta por TEXTO (rótulo +
- * dirección + localidad), no por `lat`/`lng`. Las coordenadas que expone la
- * API de MITECO no siempre son precisas (geocodificación de origen variable
- * según la estación) — enviar a Google Maps una `lat,lng` ligeramente
- * desplazada lleva al usuario a un punto que puede no ser la gasolinera real,
- * sin ningún indicio de que la ruta está mal. Con una consulta de texto,
- * Google Maps usa SU PROPIO geocodificador/índice de negocios para localizar
- * la gasolinera por nombre y dirección, con más probabilidad de acertar el
- * punto real que confiar en la coordenada bruta de MITECO.
- *
- * `encodeURIComponent` neutraliza cualquier carácter con significado HTML
- * (`<`, `>`, `"`, `&`, etc.) que pudiera venir en `direccion`/`localidad`
- * (texto libre de MITECO, sin validar — ver `buildPopupHtml`): el resultado
- * es siempre seguro para interpolarse dentro de un atributo `href`.
- */
-function buildGoogleMapsDirectionsUrl(rotulo: string, direccion: string, localidad: string): string {
-  return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(`${rotulo} ${direccion}, ${localidad}`);
-}
-
-/**
- * Escapa el valor antes de interpolarlo dentro de un atributo HTML
- * (`data-station-id="..."`). `GasStation.id` (IDEESS) viene de la API
- * pública del Ministerio sin validar (ver `miteco.service.ts`): en la
- * práctica es siempre un código numérico, pero se escapa igualmente para no
- * asumir el formato de una fuente externa, mismo criterio defensivo que ya
- * aplica `buildPopupHtml` al no interpolar nunca texto libre sin control.
- */
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
 /**
  * Fallback defensivo por si algún marcador se crease sin icono explícito
  * (no ocurre en este componente: tanto el marcador de usuario como los de
@@ -151,40 +105,17 @@ function escapeHtmlAttribute(value: string): string {
  */
 L.Icon.Default.imagePath = 'assets/leaflet/';
 
-/**
- * Naranja de marca ("Naranja Fuego" del logo, ver `src/assets/logo.svg`)
- * para diferenciar visualmente las gasolineras de "tu ubicación".
- */
-const STATION_MARKER_COLOR = '#FF512F';
-/** Azul, deliberadamente distinto del naranja de marca: solo hay un marcador de este tipo en el mapa. */
+/** Azul, deliberadamente distinto del naranja de marca de `STATION_ICON`/`FAVORITE_ICON` (`[[09-rutas]]`, `./gas-station-popup.ts`): solo hay un marcador de este tipo en el mapa. */
 const USER_MARKER_COLOR = '#2563EB';
-/** Amarillo (RF-04, marcador de gasolinera favorita), deliberadamente distinto tanto del naranja de "gasolinera normal" como del azul de "tu ubicación". */
-const FAVORITE_MARKER_COLOR = '#FFC107';
-
-/**
- * Icono de gasolinera: chincheta (forma "pin") en naranja de marca.
- * Se crea una única vez (constante de módulo) y se reutiliza en los hasta
- * 50 marcadores de `redraw`, en vez de instanciar un `L.DivIcon` por
- * estación — mismo criterio de minimizar objetos en memoria ya aplicado
- * al límite de marcadores (ver `docs/features/03-capa-gasolineras.md`).
- */
-const STATION_ICON = L.divIcon({
-  className: 'app-map-icon app-map-icon--station',
-  html: `
-    <svg width="26" height="36" viewBox="0 0 26 36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
-      <path d="M13 0C5.82 0 0 5.82 0 13c0 9.75 13 23 13 23s13-13.25 13-23C26 5.82 20.18 0 13 0z" fill="${STATION_MARKER_COLOR}"/>
-      <circle cx="13" cy="13" r="5.5" fill="#fff"/>
-    </svg>
-  `,
-  iconSize: [26, 36],
-  iconAnchor: [13, 36],
-  popupAnchor: [0, -32],
-});
 
 /**
  * Icono de "tu ubicación": punto azul (forma de círculo, no de chincheta),
  * para que la diferencia con las gasolineras no dependa solo del color
  * (mejor accesibilidad para usuarios con dificultad para distinguir colores).
+ * Se queda LOCAL a este componente (no en `./gas-station-popup.ts`): es
+ * específico de "tu ubicación en el mapa principal", sin equivalente en
+ * `RoutePlannerPage` (que no dibuja un marcador de "tu ubicación" genérico,
+ * solo el origen/destino de la ruta calculada).
  */
 const USER_ICON = L.divIcon({
   className: 'app-map-icon app-map-icon--user',
@@ -192,26 +123,6 @@ const USER_ICON = L.divIcon({
   iconSize: [18, 18],
   iconAnchor: [9, 9],
   popupAnchor: [0, -12],
-});
-
-/**
- * Icono de gasolinera FAVORITA (RF-04): misma chincheta que `STATION_ICON`
- * (sigue siendo una gasolinera, mismo significado de forma) pero en amarillo
- * y con una estrella en vez del círculo blanco — dos señales (color Y forma
- * del glifo interior), no solo el color, mismo criterio de accesibilidad ya
- * aplicado en `USER_ICON` para diferenciar el marcador de "tu ubicación".
- */
-const FAVORITE_ICON = L.divIcon({
-  className: 'app-map-icon app-map-icon--favorite',
-  html: `
-    <svg width="26" height="36" viewBox="0 0 26 36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
-      <path d="M13 0C5.82 0 0 5.82 0 13c0 9.75 13 23 13 23s13-13.25 13-23C26 5.82 20.18 0 13 0z" fill="${FAVORITE_MARKER_COLOR}"/>
-      <path d="M13 7.5l1.35 3.64 3.88.16-3.04 2.41 1.04 3.74-3.23-2.15-3.23 2.15 1.04-3.74-3.04-2.41 3.88-.16z" fill="#fff"/>
-    </svg>
-  `,
-  iconSize: [26, 36],
-  iconAnchor: [13, 36],
-  popupAnchor: [0, -32],
 });
 
 /**
@@ -259,8 +170,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   /**
    * IDs (IDEESS) de las gasolineras favoritas del usuario activo, en vivo
    * (`FavoritesService.getFavorites()`, RF-04). Un `Set`, no un array, para
-   * que `buildPopupHtml`/`syncOpenPopupButton` comprueben pertenencia en
-   * O(1) por cada marcador dibujado.
+   * que `buildGasStationPopupHtml`/`syncOpenPopupButton` comprueben
+   * pertenencia en O(1) por cada marcador dibujado.
    */
   protected readonly favoriteIds = signal<Set<string>>(new Set());
 
@@ -322,8 +233,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     // de segmento — sin necesidad de un handler que llame a `redraw()` a mano.
     effect(() => this.redraw());
 
-    // Efecto SEPARADO del de arriba, a propósito: si `buildPopupHtml` (que
-    // `redraw()` invoca) leyera `favoriteIds()` sin envolverla en
+    // Efecto SEPARADO del de arriba, a propósito: si `buildGasStationPopupHtml`
+    // (que `redraw()` invoca) leyera `favoriteIds()` sin envolverla en
     // `untracked()`, este mismo efecto quedaría también suscrito a
     // `favoriteIds` y CADA alta/baja de favorito volvería a dibujar los ~50
     // marcadores del mapa (coste innecesario) y, peor, cerraría de golpe el
@@ -599,7 +510,9 @@ export class MapComponent implements AfterViewInit, OnDestroy {
         icon: favoriteIds.has(estacion.id) ? FAVORITE_ICON : STATION_ICON,
         title: `Gasolinera ${estacion.marca} en ${estacion.municipio}`,
       })
-        .bindPopup(this.buildPopupHtml(estacion, fuel, favoriteIds), { className: 'gas-station-popup' })
+        .bindPopup(buildGasStationPopupHtml(estacion, fuel, FUEL_LABELS[fuel], favoriteIds.has(estacion.id)), {
+          className: 'gas-station-popup',
+        })
         .addTo(this.stationsLayer);
 
       this.markersPorId.set(estacion.id, marker);
@@ -639,86 +552,6 @@ export class MapComponent implements AfterViewInit, OnDestroy {
     for (const [stationId, marker] of this.markersPorId) {
       marker.setIcon(favoriteIds.has(stationId) ? FAVORITE_ICON : STATION_ICON);
     }
-  }
-
-  /**
-   * HTML del popup de cada gasolinera: solo el precio del combustible
-   * seleccionado (nunca los 3). Como texto HTML visible solo interpola
-   * `marca` (tipo cerrado `GasStationBrand`, generado por `MitecoService`,
-   * nunca texto libre de la API), la etiqueta fija del combustible y un
-   * precio numérico — nunca `direccion`/`municipio` (texto libre de la
-   * fuente externa) como HTML sin más, para no introducir HTML/JS arbitrario
-   * en el mapa vía `bindPopup` (que interpreta el string como HTML). Esos dos
-   * campos SÍ se usan, pero solo dentro de `buildDirectionsLinkHtml`, que los
-   * pasa por `encodeURIComponent` antes de interpolarlos (contexto distinto:
-   * un valor de URL, no HTML — ver justificación completa en
-   * `buildGoogleMapsDirectionsUrl`).
-   *
-   * `favoriteIds` se recibe ya resuelto (RF-04), no se lee aquí como signal:
-   * esta función se invoca desde `redraw()`, que corre dentro del `effect()`
-   * cuya ÚNICA dependencia reactiva debe ser `selectedFuel` (ver comentario
-   * del constructor) — es `redraw()` quien envuelve la lectura de
-   * `favoriteIds()` en `untracked()` una única vez y se la pasa a esta
-   * función y a la selección de icono del marcador, en vez de que cada una
-   * vuelva a leer la signal por su cuenta.
-   */
-  private buildPopupHtml(estacion: GasStation, fuel: FuelKey, favoriteIds: Set<string>): string {
-    const precio = estacion.precios[fuel];
-    // Invariante: `redraw()` ya filtró por `precios[fuel] !== null` antes de
-    // llegar aquí, pero se mantiene el guard por si esta función se reutiliza
-    // alguna vez con una estación sin filtrar previamente.
-    // `.replace('.', ',')`: formato español de precio (coma decimal), no el
-    // punto que devuelve `toFixed` por defecto (formato en_US, ver
-    // `docs/features/06-favoritos.md`).
-    const precioTexto = precio !== null ? `${precio.toFixed(3).replace('.', ',')} €` : 'No disponible';
-    const esFavorito = favoriteIds.has(estacion.id);
-
-    return `
-      <strong class="gas-station-popup__marca">${estacion.marca}</strong>
-      <p class="gas-station-popup__precio">${FUEL_LABELS[fuel]}: ${precioTexto}</p>
-      ${this.buildDirectionsLinkHtml(estacion.marca, estacion.direccion, estacion.municipio)}
-      ${this.buildFavoriteButtonHtml(estacion.id, esFavorito)}
-    `;
-  }
-
-  /**
-   * Enlace "📍 Cómo llegar" embebido en el popup: `target="_blank"` +
-   * `rel="noopener noreferrer"` (nunca dejar que la pestaña nueva pueda
-   * acceder a `window.opener` de esta app, buena práctica estándar para
-   * cualquier enlace externo). Mismo criterio que `buildFavoriteButtonHtml`:
-   * HTML puro, nunca pasa por el compilador de plantillas de Angular.
-   */
-  private buildDirectionsLinkHtml(rotulo: string, direccion: string, localidad: string): string {
-    return `
-      <a
-        class="${DIRECTIONS_LINK_CLASS}"
-        href="${buildGoogleMapsDirectionsUrl(rotulo, direccion, localidad)}"
-        target="_blank"
-        rel="noopener noreferrer"
-      >📍 Cómo llegar</a>
-    `;
-  }
-
-  /**
-   * Botón "⭐ Guardar" / "Quitar ⭐" embebido en el popup. Es HTML puro (el
-   * mismo string se inyecta luego en el DOM real vía `bindPopup`/`innerHTML`
-   * de Leaflet): no lleva `(click)` de Angular porque este nodo nunca pasa
-   * por el compilador de plantillas de Angular. `data-station-id` es lo
-   * único que permite, más tarde, que `onPopupOpen` sepa a qué estación
-   * corresponde el botón que acaba de aparecer en el DOM.
-   */
-  private buildFavoriteButtonHtml(stationId: string, esFavorito: boolean): string {
-    const activeClass = esFavorito ? ` ${FAV_BUTTON_CLASS}--active` : '';
-    const texto = esFavorito ? 'Quitar ⭐' : '⭐ Guardar';
-
-    return `
-      <button
-        type="button"
-        class="${FAV_BUTTON_CLASS}${activeClass}"
-        data-station-id="${escapeHtmlAttribute(stationId)}"
-        aria-pressed="${esFavorito}"
-      >${texto}</button>
-    `;
   }
 
   /**

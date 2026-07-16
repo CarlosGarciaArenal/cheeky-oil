@@ -1,0 +1,113 @@
+<!--
+  Misma justificación de `padding-top` que `favorites-panel.page.html`: la
+  cabecera global vive en `AppComponent`, fuera del árbol de esta página, y
+  `ion-router-outlet` ocupa todo el viewport por detrás de ella — sin este
+  offset, el botón "Mapa Principal" (lo primero del contenido) quedaría
+  oculto tras la cabecera.
+-->
+<ion-content class="route-planner">
+  <div class="route-planner__wrapper">
+    <ion-button class="route-planner__back" fill="clear" routerLink="/home" aria-label="Volver al mapa principal">
+      <ion-icon slot="start" name="map-outline"></ion-icon>
+      Mapa Principal
+    </ion-button>
+
+    <h1 class="route-planner__title">Planificador de Rutas</h1>
+
+    <form class="route-planner__form" (ngSubmit)="calculateRoute()" novalidate>
+      <ion-list class="route-planner__list" lines="full">
+        <ion-item class="route-planner__origin-item">
+          <ion-input
+            label="Origen"
+            labelPlacement="floating"
+            placeholder="Dirección, ciudad..."
+            autocomplete="off"
+            [value]="originText()"
+            (ionInput)="onOriginInput($event)"
+          ></ion-input>
+          <ion-button
+            slot="end"
+            fill="clear"
+            [disabled]="resolvingLocation()"
+            (click)="useMyLocation()"
+            aria-label="Usar mi ubicación actual como origen"
+          >
+            @if (resolvingLocation()) {
+              <ion-spinner name="crescent" aria-label="Obteniendo ubicación..."></ion-spinner>
+            } @else {
+              <ion-icon slot="icon-only" name="locate-outline"></ion-icon>
+            }
+          </ion-button>
+        </ion-item>
+
+        <ion-item>
+          <ion-input
+            label="Destino"
+            labelPlacement="floating"
+            placeholder="Dirección, ciudad..."
+            autocomplete="off"
+            [value]="destinationText()"
+            (ionInput)="onDestinationInput($event)"
+          ></ion-input>
+        </ion-item>
+      </ion-list>
+
+      <div class="route-planner__filters">
+        <ion-select
+          class="route-planner__fuel-filter"
+          fill="outline"
+          interface="popover"
+          label="Combustible"
+          labelPlacement="floating"
+          [value]="selectedFuel()"
+          (ionChange)="onFuelChange($event)"
+        >
+          <ion-select-option value="gasolina95">{{ fuelLabels.gasolina95 }}</ion-select-option>
+          <ion-select-option value="gasolina98">{{ fuelLabels.gasolina98 }}</ion-select-option>
+          <ion-select-option value="diesel">{{ fuelLabels.diesel }}</ion-select-option>
+        </ion-select>
+
+        <ion-select
+          class="route-planner__deviation-filter"
+          fill="outline"
+          interface="popover"
+          label="Desvío máximo"
+          labelPlacement="floating"
+          [value]="maxDeviationKm()"
+          (ionChange)="onDeviationChange($event)"
+        >
+          @for (option of deviationOptions; track option.value) {
+            <ion-select-option [value]="option.value">{{ option.label }}</ion-select-option>
+          }
+        </ion-select>
+      </div>
+
+      @if (errorMessage()) {
+        <ion-text color="danger" class="route-planner__error" role="alert">
+          <p>{{ errorMessage() }}</p>
+        </ion-text>
+      }
+
+      <ion-button class="route-planner__submit" type="submit" expand="block" [disabled]="calculating()">
+        @if (calculating()) {
+          <ion-spinner name="crescent" aria-label="Calculando ruta..."></ion-spinner>
+        } @else {
+          <ion-icon slot="start" name="navigate-outline"></ion-icon>
+          Calcular Ruta
+        }
+      </ion-button>
+
+      @if (matchedStationsCount() !== null) {
+        <p class="route-planner__results-count" aria-live="polite">
+          @if (matchedStationsCount() === 0) {
+            No se ha encontrado ninguna gasolinera con ese combustible dentro de ese desvío.
+          } @else {
+            {{ matchedStationsCount() }} gasolinera{{ matchedStationsCount() === 1 ? '' : 's' }} encontrada{{ matchedStationsCount() === 1 ? '' : 's' }} cerca de tu ruta.
+          }
+        </p>
+      }
+    </form>
+
+    <div #mapContainer class="route-planner__map" role="application" aria-label="Mapa de la ruta calculada"></div>
+  </div>
+</ion-content>

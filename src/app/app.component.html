@@ -10,6 +10,9 @@
 
       @if (authService.currentUser()) {
         <ion-buttons slot="end">
+          <ion-button routerLink="/rutas" aria-label="Planificador de rutas">
+            <ion-icon slot="icon-only" name="navigate-outline"></ion-icon>
+          </ion-button>
           <ion-button routerLink="/favoritos" aria-label="Mis gasolineras favoritas">
             <ion-icon slot="icon-only" name="star-outline"></ion-icon>
           </ion-button>

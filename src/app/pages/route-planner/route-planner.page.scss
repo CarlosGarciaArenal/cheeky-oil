@@ -1,0 +1,81 @@
+/*
+ * `padding-top` calculado, mismo criterio y misma fórmula que
+ * `favorites-panel.page.scss`: la cabecera global vive en `AppComponent`,
+ * fuera del árbol de esta página, y `ion-router-outlet` ocupa todo el
+ * viewport por detrás de ella.
+ */
+.route-planner__wrapper {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 56px + 12px) 16px 32px;
+}
+
+.route-planner__back {
+  margin: 0 0 4px -8px;
+}
+
+.route-planner__title {
+  margin: 4px 0 16px;
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.route-planner__form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.route-planner__list {
+  margin: 0 0 4px;
+}
+
+/* El botón "Usar mi ubicación" vive en `slot="end"` del propio `ion-item`, sin CSS adicional: Ionic ya lo alinea en fila junto al input. */
+.route-planner__origin-item ion-button {
+  margin: 0;
+}
+
+.route-planner__filters {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 10px;
+  margin: 8px 0 4px;
+}
+
+/* Mismo criterio que `.map__fuel-filter`/`.map__distance-filter` (`map.component.scss`): reparto igual del ancho, `min-width: 0` para que un texto largo ("Gasolina 98") no fuerce el contenedor a ensancharse. */
+.route-planner__fuel-filter,
+.route-planner__deviation-filter {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.route-planner__error {
+  margin: 4px 0;
+}
+
+.route-planner__submit {
+  margin: 8px 0 0;
+}
+
+.route-planner__results-count {
+  margin: 10px 0 0;
+  font-size: 0.875rem;
+  text-align: center;
+  color: var(--ion-color-medium);
+}
+
+/*
+ * Altura explícita, obligatoria para que Leaflet calcule un tamaño real de
+ * partida (mismo motivo que `.price-chart-modal__canvas`, ver su
+ * comentario): a diferencia de `MapComponent` (mapa a pantalla completa,
+ * `home.page.html`), este mapa vive en flujo normal de documento, DEBAJO
+ * del formulario — necesita una altura fija/con tope, no `height: 100%` de
+ * un contenedor sin altura propia.
+ */
+.route-planner__map {
+  height: min(50vh, 480px);
+  margin-top: 12px;
+  border-radius: 12px;
+  overflow: hidden;
+}

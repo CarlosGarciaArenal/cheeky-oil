@@ -69,6 +69,27 @@
     0 2px 6px rgba(0, 0, 0, 0.35);
 }
 
+/*
+ * Origen/destino de una ruta (`route-planner.page.ts`, `[[09-rutas]]`): el
+ * halo azul de `.app-map-icon__dot` de arriba está pensado específicamente
+ * para "tu ubicación" (`USER_MARKER_COLOR`, `map.component.ts`) — reutilizar
+ * ese mismo halo tal cual para un punto verde (origen) o rojo (destino)
+ * quedaría incoherente (aro azul alrededor de un punto de otro color). Estas
+ * dos reglas solo sobrescriben el color del halo, heredando el resto
+ * (borde blanco, tamaño) de `.app-map-icon__dot`.
+ */
+.app-map-icon--origin .app-map-icon__dot {
+  box-shadow:
+    0 0 0 2px rgba(22, 163, 74, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.app-map-icon--destination .app-map-icon__dot {
+  box-shadow:
+    0 0 0 2px rgba(220, 38, 38, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
 /* Popup de gasolinera: naranja claro, coherente con el naranja de marca de los marcadores. */
 .gas-station-popup .leaflet-popup-content-wrapper {
   background: #fff4ec;

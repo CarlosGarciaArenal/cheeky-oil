@@ -11,7 +11,7 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { logOutOutline, starOutline } from 'ionicons/icons';
+import { logOutOutline, navigateOutline, starOutline } from 'ionicons/icons';
 
 import { AuthService } from './core/services/auth.service';
 
@@ -27,7 +27,7 @@ export class AppComponent {
   private readonly router = inject(Router);
 
   constructor() {
-    addIcons({ logOutOutline, starOutline });
+    addIcons({ logOutOutline, navigateOutline, starOutline });
   }
 
   protected async onLogout(): Promise<void> {
