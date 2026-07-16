@@ -1,12 +1,23 @@
+import { FuelType } from './gas-station.model';
+
 /**
  * Documento de la subcolección `users/{uid}/favorites/{ideess}/history`
  * (RF-04, histórico de precios, `[[07-monitorizacion-historica]]`). El id de
  * cada documento ES la fecha en formato `YYYY-MM-DD` (huso horario local del
  * dispositivo) — no se duplica como campo, igual que `Favorite.id` ya
  * reutiliza el IDEESS como id de documento en vez de guardarlo dos veces.
+ *
+ * CORRECCIÓN CRÍTICA [ARQUITECTO]: `prices` es un mapa por `FuelType`, no un
+ * único `price` — un mismo documento diario registra TODOS los combustibles
+ * que la estación vendía ese día (bug previo: el histórico solo guardaba el
+ * precio del combustible seleccionado en el momento de la consulta,
+ * mezclando gasolina95/98/diésel en la misma serie temporal según qué
+ * combustible tuviera seleccionado el usuario ese día). `Partial` porque no
+ * todas las estaciones venden los 3 tipos (ver `FuelPrices`) — solo se
+ * guardan las claves con precio real, nunca `null`.
  */
 export interface PriceHistoryDoc {
-  price: number;
+  prices: Partial<Record<FuelType, number>>;
 }
 
 /**

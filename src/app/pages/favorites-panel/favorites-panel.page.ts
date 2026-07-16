@@ -236,10 +236,14 @@ export class FavoritesPanelPage {
     // "cargando".
     combineLatest([favoritos$, estacionesPorFuel$])
       .pipe(
-        map(([favoritos, { fuel, estaciones }]) => this.favoritesService.mergeWithPrices(favoritos, estaciones, fuel)),
+        map(([favoritos, { fuel, estaciones }]) => ({
+          favoritos,
+          estaciones,
+          favoritosConPrecio: this.favoritesService.mergeWithPrices(favoritos, estaciones, fuel),
+        })),
         takeUntilDestroyed(this.destroyRef),
       )
-      .subscribe((favoritosConPrecio) => {
+      .subscribe(({ favoritos, estaciones, favoritosConPrecio }) => {
         this.preciosPorId.set(new Map(favoritosConPrecio.map((favorito) => [favorito.id, favorito])));
         this.isLoading.set(false);
 
@@ -248,11 +252,16 @@ export class FavoritesPanelPage {
         // (que ya lleva su propio `tap(recordTodayHistory)` para otros
         // consumidores), sino `getFavorites()` + `mergeWithPrices()` por
         // separado — sin esta llamada, el Historiador nunca se ejecutaría en
-        // la práctica. Fire-and-forget: `recordTodayHistory` ya captura sus
-        // propios errores (ver `FavoritesService`), así que un fallo de
-        // Firestore al escribir el histórico nunca puede afectar a los
-        // precios ya mostrados en pantalla.
-        void this.favoritesService.recordTodayHistory(favoritosConPrecio);
+        // la práctica. Se pasan `favoritos`/`estaciones` CRUDOS (no
+        // `favoritosConPrecio`, ya filtrado a un solo combustible): desde la
+        // corrección [ARQUITECTO] del bug de histórico mezclado,
+        // `recordTodayHistory` necesita `GasStation.precios` completo para
+        // registrar los 3 combustibles a la vez (ver su documentación en
+        // `FavoritesService`). Fire-and-forget: `recordTodayHistory` ya
+        // captura sus propios errores, así que un fallo de Firestore al
+        // escribir el histórico nunca puede afectar a los precios ya
+        // mostrados en pantalla.
+        void this.favoritesService.recordTodayHistory(favoritos, estaciones);
       });
   }
 
@@ -311,6 +320,18 @@ export class FavoritesPanelPage {
    * `loadingId` (el `Favorite.id` de la tarjeta pulsada, o `GENERAL_HISTORY_ID`
    * para el botón general) deshabilita SOLO ese botón mientras se resuelve,
    * mismo patrón ya usado por `removingId` en `onRemove`.
+   *
+   * `getHistory(...)` recibe `this.selectedFuel()` (el combustible YA
+   * seleccionado en esta pantalla, ver `onFuelChange`): la gráfica siempre
+   * muestra la evolución del mismo combustible que el usuario está viendo en
+   * las tarjetas en ese momento, nunca una mezcla de los 3 (corrección
+   * [ARQUITECTO] del bug de histórico mezclado, ver `FavoritesService.getHistory`).
+   * Por el mismo motivo, `PriceChartModalComponent` recibe `fuelLabel:
+   * this.fuelLabels[this.selectedFuel()]` (texto legible, no el `FuelType`
+   * en crudo — ver documentación de ese `@Input` en el propio componente)
+   * para dejar claro en el título de la gráfica de qué combustible son los
+   * datos, ya que el mismo botón puede abrirse con gasolina95, gasolina98 o
+   * diésel según lo que el usuario tuviera seleccionado en ese momento.
    */
   private async openHistoryModal(
     loadingId: string,
@@ -324,7 +345,10 @@ export class FavoritesPanelPage {
     this.loadingHistoryId.set(loadingId);
     try {
       const historial = await firstValueFrom(
-        this.favoritesService.getHistory(favoritosParaHistorico.map((favorito) => favorito.id)),
+        this.favoritesService.getHistory(
+          favoritosParaHistorico.map((favorito) => favorito.id),
+          this.selectedFuel(),
+        ),
       );
 
       const stations: PriceChartStation[] = favoritosParaHistorico.map((favorito) => ({
@@ -336,7 +360,7 @@ export class FavoritesPanelPage {
 
       const modal = await this.modalController.create({
         component: PriceChartModalComponent,
-        componentProps: { stations, title: titulo },
+        componentProps: { stations, title: titulo, fuelLabel: this.fuelLabels[this.selectedFuel()] },
       });
       await modal.present();
     } catch (error: unknown) {

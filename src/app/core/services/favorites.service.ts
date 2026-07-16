@@ -18,7 +18,7 @@ import { Observable, combineLatest, from, map, of, tap, throwError } from 'rxjs'
 
 import { AuthService } from './auth.service';
 import { MitecoService } from './miteco.service';
-import { FuelType, GasStation } from '../models/gas-station.model';
+import { FuelPrices, FuelType, GasStation } from '../models/gas-station.model';
 import { Favorite, FavoriteWithPrice } from '../models/favorite.model';
 import { PriceHistoryDoc, PriceHistoryPoint } from '../models/price-history.model';
 import { MAX_GASOLINERAS_GUARDADAS } from '../models/user.model';
@@ -185,11 +185,18 @@ export class FavoritesService {
    * es lo único que este método promete a sus consumidores. Cualquier error
    * se captura y se registra en consola dentro del propio método privado,
    * nunca llega al `Observable` público.
+   *
+   * El `tap` recibe la tupla CRUDA `[favoritos, estaciones]` (antes del
+   * `map` a `mergeWithPrices`), no el `FavoriteWithPrice[]` ya filtrado por
+   * `combustibleType`: `recordTodayHistory` necesita `GasStation.precios`
+   * completo (los 3 combustibles) para poder registrar el histórico de
+   * TODOS los tipos a la vez, no solo el que el usuario tuviera
+   * seleccionado en ese momento (bug corregido, ver `PriceHistoryDoc`).
    */
   getFavoritesWithPrices(combustibleType: FuelType): Observable<FavoriteWithPrice[]> {
     return combineLatest([this.getFavorites(), this.mitecoService.getEstaciones()]).pipe(
+      tap(([favoritos, estaciones]) => this.recordTodayHistory(favoritos, estaciones)),
       map(([favoritos, estaciones]) => this.mergeWithPrices(favoritos, estaciones, combustibleType)),
-      tap((favoritosConPrecio) => this.recordTodayHistory(favoritosConPrecio)),
     );
   }
 
@@ -269,63 +276,102 @@ export class FavoritesService {
   }
 
   /**
-   * Historiador (RF-04, `[[07-monitorizacion-historica]]`): por cada favorito
-   * con precio conocido hoy, registra en Firestore
+   * Extrae de `precios` (los 3 combustibles de `GasStation`, con `null` en
+   * los que la estación no vende) solo las claves con precio real, listas
+   * para `PriceHistoryDoc.prices` — nunca se persiste una clave con valor
+   * `null`: su ausencia en el mapa YA significa "sin dato ese día", igual
+   * que un documento entero ausente ya significa "sin dato ese día" a nivel
+   * de estación.
+   */
+  private extractKnownPrices(precios: FuelPrices): Partial<Record<FuelType, number>> {
+    const prices: Partial<Record<FuelType, number>> = {};
+    for (const [fuelType, precio] of Object.entries(precios) as [FuelType, number | null][]) {
+      if (precio !== null) {
+        prices[fuelType] = precio;
+      }
+    }
+    return prices;
+  }
+
+  /**
+   * Historiador (RF-04, `[[07-monitorizacion-historica]]`): por cada
+   * favorito con estación conocida hoy en `estaciones` (respuesta de
+   * MITECO), registra en Firestore
    * `users/{uid}/favorites/{ideess}/history/{YYYY-MM-DD}` (id de documento =
-   * fecha de hoy) con el único campo `price` — pero SOLO si ese documento no
-   * existe ya, comprobado con un `getDoc` previo. Con como mucho 10
-   * favoritos, el coste máximo de esta llamada es 10 lecturas (`getDoc`) +
-   * hasta 10 escrituras (`setDoc`, solo la PRIMERA vez que se consulta cada
-   * estación en el día — el resto del día, siempre 0 escrituras).
+   * fecha de hoy) un mapa `prices` con TODOS los combustibles que esa
+   * estación vendía hoy — pero SOLO si ese documento no existe ya,
+   * comprobado con un `getDoc` previo. Con como mucho 10 favoritos, el coste
+   * máximo de esta llamada es 10 lecturas (`getDoc`) + hasta 10 escrituras
+   * (`setDoc`, solo la PRIMERA vez que se consulta cada estación en el día —
+   * el resto del día, siempre 0 escrituras). El coste NO depende de cuántos
+   * combustibles tenga la estación: siguen siendo 1 lectura + como mucho 1
+   * escritura por favorito, sea cual sea el número de precios dentro del
+   * mapa.
+   *
+   * CORRECCIÓN CRÍTICA [ARQUITECTO] (bug de histórico mezclado): antes
+   * recibía `FavoriteWithPrice[]` (ya cruzado con UN solo `combustibleType`)
+   * y guardaba `{ price }` — así, el histórico de una gasolinera mezclaba
+   * gasolina95/98/diésel en la misma serie temporal según qué combustible
+   * tuviera seleccionado el usuario el día que se registró cada punto. Ahora
+   * recibe `favoritos` + `estaciones` (la respuesta CRUDA de MITECO, con
+   * `GasStation.precios` completo) y guarda los 3 precios a la vez en
+   * `prices`, para que cada combustible tenga su propia serie consistente
+   * sin importar cuál estuviera seleccionado en la UI ese día
+   * (`FavoritesService.getHistory` es quien filtra por combustible AL LEER,
+   * no este método al escribir).
    *
    * `Promise.all`, no un `for` secuencial: las hasta 10 comprobaciones
    * "¿existe ya el de hoy?" son independientes entre sí (estaciones
    * distintas, subcolecciones distintas) — no hay razón para esperar a que
    * termine una antes de lanzar la siguiente.
    *
-   * Favoritos con `precio: null` (estación sin ese combustible, o ya no
-   * presente en la respuesta de MITECO) se excluyen: no hay ningún precio
-   * real de hoy que registrar para ellos.
+   * Favoritos sin estación correspondiente en `estaciones` (ya no presente
+   * en la respuesta de MITECO) o cuya estación no vende NINGÚN combustible
+   * hoy se excluyen: no hay ningún precio real de hoy que registrar para
+   * ellos.
    *
-   * CORRECCIÓN (ciclo [UI-DEV], `[[07-monitorizacion-historica]]`): este
-   * método pasa a ser público. En el diseño original solo se llamaba desde
-   * el `tap(...)` de `getFavoritesWithPrices` — pero `FavoritesPanelPage`
-   * (el ÚNICO consumidor real de esta pantalla, ver `[[06-favoritos]]`) NO
-   * usa `getFavoritesWithPrices`: llama a `getFavorites()` y a
-   * `mergeWithPrices()` por separado (a propósito, para compartir el mismo
-   * listener de Firestore entre la lista rápida y el cruce con MITECO). Con
-   * el método `private`, el Historiador nunca llegaba a ejecutarse en la
-   * práctica — ningún precio quedaba jamás registrado. Ahora
-   * `FavoritesPanelPage` lo llama explícitamente tras `mergeWithPrices()`
-   * (ver su constructor), y `getFavoritesWithPrices` conserva su propio
-   * `tap(...)` para cualquier consumidor futuro que sí la use directamente.
+   * Público (no `private`, mismo criterio que ya documentaba esta función):
+   * `FavoritesPanelPage` NO usa `getFavoritesWithPrices` (llama a
+   * `getFavorites()` y `mergeWithPrices()` por separado, ver
+   * `[[06-favoritos]]`), así que lo invoca explícitamente tras
+   * `mergeWithPrices()` (ver su constructor) con las mismas `favoritos` y
+   * `estaciones` crudas que ya tiene en ese punto.
    */
-  async recordTodayHistory(favoritosConPrecio: FavoriteWithPrice[]): Promise<void> {
+  async recordTodayHistory(favoritos: Favorite[], estaciones: GasStation[]): Promise<void> {
     const uid = this.authService.getCurrentUser()?.uid;
     if (!uid) {
       return;
     }
 
     const hoy = this.dateId(new Date());
+    const estacionesPorId = new Map(estaciones.map((estacion) => [estacion.id, estacion]));
 
     await Promise.all(
-      favoritosConPrecio
-        .filter((favorito): favorito is FavoriteWithPrice & { precio: number } => favorito.precio !== null)
-        .map(async (favorito) => {
-          try {
-            const historyDocRef = doc(this.firestore, this.historyCollectionPath(uid, favorito.id), hoy);
-            const historySnap = await getDoc(historyDocRef);
-            if (historySnap.exists()) {
-              return;
-            }
+      favoritos.map(async (favorito) => {
+        const estacion = estacionesPorId.get(favorito.id);
+        if (!estacion) {
+          return;
+        }
 
-            const entry: PriceHistoryDoc = { price: favorito.precio };
-            await setDoc(historyDocRef, entry);
-          } catch (error) {
-            // No debe romper la emisión de precios de hoy (ver justificación en getFavoritesWithPrices).
-            console.error(`No se pudo registrar el histórico de precio de ${favorito.id}`, error);
+        const prices = this.extractKnownPrices(estacion.precios);
+        if (Object.keys(prices).length === 0) {
+          return;
+        }
+
+        try {
+          const historyDocRef = doc(this.firestore, this.historyCollectionPath(uid, favorito.id), hoy);
+          const historySnap = await getDoc(historyDocRef);
+          if (historySnap.exists()) {
+            return;
           }
-        }),
+
+          const entry: PriceHistoryDoc = { prices };
+          await setDoc(historyDocRef, entry);
+        } catch (error) {
+          // No debe romper la emisión de precios de hoy (ver justificación en getFavoritesWithPrices).
+          console.error(`No se pudo registrar el histórico de precio de ${favorito.id}`, error);
+        }
+      }),
     );
   }
 
@@ -360,8 +406,37 @@ export class FavoritesService {
    * de histórico, no dentro de un binding o `effect()` que se reevalúe en
    * cada redibujado — mismo criterio de coste ya documentado para
    * `getFavoritesWithPrices` en `[[06-favoritos]]`.
+   *
+   * CORRECCIÓN CRÍTICA [ARQUITECTO] (bug de histórico mezclado): nuevo
+   * parámetro obligatorio `fuelType` — antes este método devolvía
+   * `data.price` sin más, que con el `PriceHistoryDoc` anterior era "el
+   * combustible que el usuario tuviera seleccionado el día en que se
+   * escribió cada punto", nunca una serie coherente de un solo combustible.
+   * Ahora cada documento guarda los 3 precios (`PriceHistoryDoc.prices`) y
+   * este método extrae específicamente `data.prices[fuelType]` — la misma
+   * llamada, repetida con distinto `fuelType`, da 3 series independientes y
+   * correctas a partir de los MISMOS documentos, sin re-escribir nada.
+   * `FuelType` (no `string`, como en un planteamiento inicial más laxo): ya
+   * es el tipo que usa el resto del servicio (`combustibleType`,
+   * `mergeWithPrices`) — reutilizarlo aquí evita una segunda fuente de
+   * verdad y strings sueltos sin validar en tiempo de compilación.
+   *
+   * Retrocompatibilidad con documentos antiguos (`PriceHistoryDoc` previo,
+   * campo `price` suelto en vez de `prices`): `data.prices` es `undefined`
+   * en esos documentos, así que `data.prices?.[fuelType]` da `undefined` y
+   * el punto se descarta silenciosamente (`filter` de abajo) — nunca se
+   * borran ni se migran esos documentos antiguos (no vale la pena una
+   * escritura extra por algo que ya no se puede leer de forma fiable, y
+   * `recordTodayHistory` nunca vuelve a tocar un documento ya existente), su
+   * precio suelto simplemente deja de ser alcanzable y el día queda como
+   * "sin dato" (hueco que `spanGaps: true` en `PriceChartModalComponent` ya
+   * sabe saltar).
    */
-  getHistory(ideessList: string[], days: number = 30): Observable<Map<string, PriceHistoryPoint[]>> {
+  getHistory(
+    ideessList: string[],
+    fuelType: FuelType,
+    days: number = 30,
+  ): Observable<Map<string, PriceHistoryPoint[]>> {
     const uid = this.authService.getCurrentUser()?.uid;
     if (!uid) {
       return throwError(() => new Error('No hay sesión activa: no se puede acceder al histórico de precios.'));
@@ -382,10 +457,12 @@ export class FavoritesService {
           const historyQuery = query(historyRef, where(documentId(), '>=', cutoffId), orderBy(documentId()));
           const snapshot = await getDocs(historyQuery);
 
-          const puntos: PriceHistoryPoint[] = snapshot.docs.map((historyDoc) => ({
-            date: historyDoc.id,
-            price: (historyDoc.data() as PriceHistoryDoc).price,
-          }));
+          const puntos: PriceHistoryPoint[] = snapshot.docs
+            .map((historyDoc): PriceHistoryPoint | null => {
+              const precio = (historyDoc.data() as Partial<PriceHistoryDoc>).prices?.[fuelType];
+              return precio === undefined ? null : { date: historyDoc.id, price: precio };
+            })
+            .filter((punto): punto is PriceHistoryPoint => punto !== null);
 
           return [ideess, puntos] as const;
         }),

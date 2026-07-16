@@ -85,6 +85,19 @@ export class PriceChartModalComponent implements OnInit {
 
   @Input({ required: true }) stations: PriceChartStation[] = [];
   @Input() title = 'Evolución de precio';
+  /**
+   * Nombre legible del combustible mostrado (ej. "Diésel"), no el `FuelType`
+   * en crudo (`'diesel'`): este componente es de presentación pura (ver
+   * documentación de la clase) y no conoce `FuelType` ni cómo traducirlo a
+   * texto — `FavoritesPanelPage` ya resuelve esa traducción con su propio
+   * `FUEL_LABELS` (mismo criterio ya aplicado a `PriceChartStation`, que
+   * tampoco expone `GasStation` ni `FuelType` en crudo). Se muestra junto al
+   * título para que quede claro de qué combustible es la gráfica, ya que
+   * `FavoritesService.getHistory` filtra los puntos a UN solo combustible a
+   * la vez (ver `[[07-monitorizacion-historica]]`, corrección [ARQUITECTO]
+   * del histórico por combustible).
+   */
+  @Input({ required: true }) fuelLabel = '';
 
   protected chartData: ChartData<'line', (number | null)[], string> = { labels: [], datasets: [] };
   protected chartOptions: ChartConfiguration<'line'>['options'] = {};
