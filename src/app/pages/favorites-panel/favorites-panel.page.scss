@@ -117,7 +117,29 @@
   color: #991b1b;
 }
 
-@media (prefers-color-scheme: dark) {
+/*
+ * `:host-context(.ion-palette-dark)`, no `@media (prefers-color-scheme: dark)`
+ * (bug reportado por el usuario, ver `[[10-tema-claro-oscuro]]`): estos
+ * colores se decidían por la preferencia CRUDA del sistema operativo, sin
+ * enterarse de si el usuario había forzado un tema distinto con el toggle de
+ * `ThemeService`. Con el sistema en oscuro y el usuario forzando "Claro" a
+ * mano, esta media query seguía activándose (el SO sigue en oscuro) mientras
+ * el resto de la UI (fondos de `ion-card`, etc.) ya se veía en claro vía la
+ * clase `ion-palette-dark` — dejando estos verdes/amarillos/rojos "para fondo
+ * oscuro" (pensados para leerse sobre negro/`#121212`) renderizados sobre un
+ * fondo claro real: texto pálido sobre fondo pálido, casi ilegible. Atar
+ * estos colores a la MISMA clase que gobierna el resto del tema
+ * (`ion-palette-dark`, aplicada por `ThemeService` en `<html>`) garantiza que
+ * los tres (fondo de Ionic, y estos colores a medida) cambien siempre
+ * juntos, sin importar si el usuario sigue al sistema o lo ha forzado a
+ * mano. `:host-context(...)` (no un simple ascendente en `global.scss`)
+ * porque este archivo SÍ está encapsulado en el componente (a diferencia de
+ * `.gas-station-popup`, que vive en `global.scss` por inyectarse fuera del
+ * árbol de Angular) — es la forma que Angular ofrece para que un selector de
+ * component-scoped CSS reaccione a una clase en un ANCESTRO fuera del propio
+ * componente (aquí, `<html>`).
+ */
+:host-context(.ion-palette-dark) {
   .refuel-advice--green {
     background: rgba(34, 197, 94, 0.12);
     border-color: #166534;
@@ -311,7 +333,8 @@
   margin: 16px 0 0;
 }
 
-@media (prefers-color-scheme: dark) {
+/* `:host-context(.ion-palette-dark)`, mismo motivo que el bloque de arriba (ver comentario junto a `.refuel-advice--green`, `[[10-tema-claro-oscuro]]`) — antes `@media (prefers-color-scheme: dark)`. */
+:host-context(.ion-palette-dark) {
   /* Mismos pares oscuros que `.gas-station-popup` en `global.scss`. Contraste verificado: `#ffd9b8` sobre `#2b1c12` → 12.42:1; `#ff8a5b` sobre `#2b1c12` → 7.07:1; `#c99368` sobre `#2b1c12` → 6.14:1. */
   .favorite-card {
     background: #2b1c12;

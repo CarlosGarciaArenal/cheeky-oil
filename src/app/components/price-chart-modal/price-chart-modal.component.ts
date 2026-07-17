@@ -15,6 +15,7 @@ import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartData } from 'chart.js';
 
 import { PriceHistoryPoint } from '../../core/models/price-history.model';
+import { ThemeService } from '../../core/services/theme.service';
 
 /** Una gasolinera ya resuelta con su histórico, lista para dibujar. */
 export interface PriceChartStation {
@@ -78,10 +79,21 @@ const CATEGORICAL_HUES_DARK = [
 })
 export class PriceChartModalComponent implements OnInit {
   private readonly modalController = inject(ModalController);
-  private readonly prefersDark =
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-color-scheme: dark)').matches;
+  /**
+   * `ThemeService.isDark()` (el tema REALMENTE activo), no
+   * `matchMedia('(prefers-color-scheme: dark)').matches` directamente (bug
+   * reportado por el usuario, ver `[[10-tema-claro-oscuro]]`): con el toggle
+   * manual de tema, la preferencia cruda del sistema puede no coincidir con
+   * lo que el usuario ha forzado en la app — leer `matchMedia` a secas
+   * dibujaría la gráfica con la paleta de colores "equivocada" (ej. colores
+   * pensados para fondo oscuro sobre un `ion-content` ya en claro). Se lee
+   * UNA vez aquí (no un `effect()`/signal reactivo): `ngOnInit` ya construye
+   * `chartData`/`chartOptions` una única vez al abrir el modal (ver su
+   * comentario), sin recalcular si el tema cambia con el modal ya abierto —
+   * mismo criterio de "instantánea al abrir" ya aplicado al resto del
+   * componente.
+   */
+  private readonly prefersDark = inject(ThemeService).isDark();
 
   @Input({ required: true }) stations: PriceChartStation[] = [];
   @Input() title = 'Evolución de precio';

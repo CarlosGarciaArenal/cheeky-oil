@@ -26,6 +26,16 @@
       <ion-select-option [value]="option.value">{{ option.label }}</ion-select-option>
     }
   </ion-select>
+
+  <ion-button
+    class="map__theme-toggle"
+    fill="solid"
+    shape="round"
+    (click)="themeService.toggle()"
+    [attr.aria-label]="themeService.isDark() ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'"
+  >
+    <ion-icon slot="icon-only" [name]="themeService.isDark() ? 'sunny-outline' : 'moon-outline'"></ion-icon>
+  </ion-button>
 </div>
 
 @if (locationError() || stationsError()) {

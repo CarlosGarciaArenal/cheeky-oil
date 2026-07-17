@@ -1,0 +1,98 @@
+rules_version = '2';
+
+/**
+ * Firestore Security Rules — Cheeky Oil (RNF-07, fortificación pre-producción).
+ *
+ * Antes de este archivo, el proyecto NO tenía ningún `firestore.rules` en el
+ * repositorio: la base de datos dependía de lo que hubiera configurado a mano
+ * en la consola de Firebase (probablemente el modo de prueba por defecto,
+ * `allow read, write: if true;` con caducidad por fecha) — sin control de
+ * versiones, sin revisión de código, y sin ninguna garantía real de que solo
+ * el propio usuario pueda leer/escribir sus datos. Este archivo es la única
+ * fuente de verdad de acceso a partir de ahora.
+ *
+ * Principio general: TODO lo que no coincide explícitamente con un `match` de
+ * abajo queda denegado por defecto (comportamiento nativo de Firestore Rules
+ * v2) — se añade además un `match /{document=**}` final como documentación
+ * explícita de ese "denegado por defecto", no porque añada ninguna
+ * restricción nueva (las reglas de Firestore conceden acceso si CUALQUIER
+ * bloque que coincide lo permite — no es "el más específico gana" ni
+ * "la última regla gana").
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /**
+     * `config/security` (RNF-08, `AuthService.register()`, `[[05b-registro-seguro]]`):
+     * guarda el "Código Familiar" que se comprueba ANTES de crear la cuenta,
+     * es decir, se lee SIN sesión (`request.auth` es `null` en ese momento) —
+     * tiene que ser legible públicamente por diseño, no es un descuido. Nunca
+     * escribible desde el cliente: se gestiona a mano desde la consola de
+     * Firebase o el Admin SDK, nunca desde la app.
+     */
+    match /config/security {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    /**
+     * `users/{userId}`: documento raíz por usuario. Ningún código de la app
+     * lee/escribe este documento directamente hoy (ver `AppUser` en
+     * `user.model.ts`, hoy sin uso real — toda la información vive en las
+     * subcolecciones de abajo) — se protege igualmente por si un ciclo futuro
+     * llega a usarlo, con la misma regla de propiedad que ya rige el resto.
+     */
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      /**
+       * `users/{userId}/favorites/{favoriteId}` (RF-04, `FavoritesService`):
+       * gasolineras guardadas por el usuario. Solo su propio dueño puede
+       * leer (`getFavorites`, `list`) o escribir (`addFavorite`/`removeFavorite`,
+       * `setDoc`/`deleteDoc`). La condición depende solo de la RUTA (`userId`
+       * capturado del propio path, comparado con `request.auth.uid`), nunca
+       * de un campo dentro del documento — por eso cubre tanto `get` como
+       * `list`/consultas de agregación (`getCountFromServer`, usado por el
+       * límite de `MAX_GASOLINERAS_GUARDADAS`) sin necesitar ninguna condición
+       * adicional sobre los datos devueltos.
+       *
+       * PENDIENTE EXPLÍCITO, NO BLOQUEANTE (ya señalado en el propio código
+       * de `FavoritesService.addFavorite`, comentario sobre "límite de UX en
+       * el cliente"): estas reglas NO imponen el límite de 10 favoritos por
+       * usuario a nivel de Firestore. Hacerlo requeriría mantener un contador
+       * denormalizado (Firestore Rules no puede contar documentos de una
+       * colección sin leerlos todos) actualizado vía Cloud Function en cada
+       * alta/baja — cambio de arquitectura mayor, fuera del alcance de esta
+       * fortificación puntual. Documentado aquí para que quede explícito y no
+       * se dé por sentado que ya está cubierto.
+       */
+      match /favorites/{favoriteId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+
+        /**
+         * `users/{userId}/favorites/{favoriteId}/history/{date}`
+         * (`[[07-monitorizacion-historica]]`): histórico diario de precio.
+         * Mismo criterio de propiedad por ruta que arriba, con un refinamiento
+         * adicional: `update`/`delete` denegados explícitamente, distinto de
+         * `favorites` (donde SÍ tiene sentido editar/borrar). El propio
+         * `FavoritesService.recordTodayHistory()` ya documenta y depende de
+         * que un día una vez registrado NUNCA se reescribe (comprueba
+         * `getDoc` antes de cada `setDoc`) — esta regla convierte esa
+         * suposición del código en una garantía real a nivel de base de
+         * datos, no solo en la disciplina del propio cliente: ni un bug futuro
+         * ni un cliente modificado a mano podría corromper/borrar historial
+         * ya escrito.
+         */
+        match /history/{date} {
+          allow read, create: if request.auth != null && request.auth.uid == userId;
+          allow update, delete: if false;
+        }
+      }
+    }
+
+    // Denegado por defecto (ver nota de cabecera): cualquier ruta no cubierta arriba.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

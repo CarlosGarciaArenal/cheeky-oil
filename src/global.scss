@@ -33,8 +33,15 @@
  */
 
 /* @import "@ionic/angular/css/palettes/dark.always.css"; */
-/* @import "@ionic/angular/css/palettes/dark.class.css"; */
-@import '@ionic/angular/css/palettes/dark.system.css';
+/*
+ * `dark.class.css`, no `dark.system.css` (ver `[[10-tema-claro-oscuro]]`):
+ * activa la paleta oscura según la clase `.ion-palette-dark` en `<html>`,
+ * que `ThemeService` (RF-0X) controla a mano — necesario para que el usuario
+ * pueda forzar Claro/Oscuro sin depender solo de la preferencia del sistema
+ * (que es lo único que permitía `dark.system.css`, vía media query).
+ */
+@import '@ionic/angular/css/palettes/dark.class.css';
+/* @import "@ionic/angular/css/palettes/dark.system.css"; */
 
 /**
  * Leaflet (mapa)
@@ -211,7 +218,20 @@
   background: #a3390d;
 }
 
-@media (prefers-color-scheme: dark) {
+/*
+ * `html.ion-palette-dark`, no `@media (prefers-color-scheme: dark)` (mismo
+ * bug y misma corrección que `favorites-panel.page.scss`, ver
+ * `[[10-tema-claro-oscuro]]`): estos colores deben seguir el tema que
+ * `ThemeService` aplica realmente (la clase `ion-palette-dark` en `<html>`),
+ * no la preferencia cruda del sistema operativo — de lo contrario, forzar
+ * "Claro" con el SO en oscuro dejaría el popup con estos colores "para fondo
+ * oscuro" mientras el resto de la UI ya se ve en claro. Prefijo de clase
+ * plano (no `:host-context`, que solo aplica a CSS con encapsulación de
+ * componente Angular): este archivo es una hoja de estilos GLOBAL, y el
+ * propio popup vive fuera del árbol de Angular (HTML crudo de Leaflet, ver
+ * comentario de cabecera de esta sección).
+ */
+html.ion-palette-dark {
   .gas-station-popup .leaflet-popup-content-wrapper,
   .gas-station-popup .leaflet-popup-tip {
     background: #2b1c12;

@@ -12,13 +12,23 @@ import {
   untracked,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { IonSelect, IonSelectOption, SelectCustomEvent, ToastController } from '@ionic/angular/standalone';
+import {
+  IonButton,
+  IonIcon,
+  IonSelect,
+  IonSelectOption,
+  SelectCustomEvent,
+  ToastController,
+} from '@ionic/angular/standalone';
+import { addIcons } from 'ionicons';
+import { moonOutline, sunnyOutline } from 'ionicons/icons';
 import * as L from 'leaflet';
 
 import { FuelPrices, GasStation } from '../../../core/models/gas-station.model';
 import { Coordinates, LocationService } from '../../../core/services/location.service';
 import { FavoritesService } from '../../../core/services/favorites.service';
 import { MitecoService } from '../../../core/services/miteco.service';
+import { ThemeService } from '../../../core/services/theme.service';
 import { FAV_BUTTON_CLASS, FAVORITE_ICON, STATION_ICON, buildGasStationPopupHtml } from './gas-station-popup';
 
 /** Centro por defecto (Madrid) mientras se resuelve o si falla la geolocalización. */
@@ -134,7 +144,7 @@ const USER_ICON = L.divIcon({
   templateUrl: './map.component.html',
   styleUrl: './map.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [IonSelect, IonSelectOption],
+  imports: [IonSelect, IonSelectOption, IonButton, IonIcon],
 })
 export class MapComponent implements AfterViewInit, OnDestroy {
   @ViewChild('mapContainer', { static: true })
@@ -166,6 +176,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private readonly favoritesService = inject(FavoritesService);
   private readonly toastController = inject(ToastController);
   private readonly destroyRef = inject(DestroyRef);
+  /** `protected` (no `private`): la plantilla lo lee directamente (`themeService.isDark()`) para elegir el icono sol/luna y llamar a `toggle()` (RF-0X). */
+  protected readonly themeService = inject(ThemeService);
 
   /**
    * IDs (IDEESS) de las gasolineras favoritas del usuario activo, en vivo
@@ -227,6 +239,8 @@ export class MapComponent implements AfterViewInit, OnDestroy {
   private openPopupStationId: string | null = null;
 
   constructor() {
+    addIcons({ sunnyOutline, moonOutline });
+
     // Reactividad del filtro: `redraw()` lee la signal `selectedFuel` en su
     // propio cuerpo, así que Angular la registra como dependencia del efecto
     // y lo vuelve a ejecutar automáticamente cada vez que el usuario cambia

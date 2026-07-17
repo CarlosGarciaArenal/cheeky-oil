@@ -79,6 +79,21 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
+/*
+ * Botón de tema (sol/luna, RF-0X), en la misma fila que los dos filtros. A
+ * diferencia de `.map__fuel-filter`/`.map__distance-filter`, NO lleva
+ * `flex: 1 1 0`: es un botón redondo de tamaño fijo por contenido (icono
+ * solo), no una tercera columna que deba repartirse el ancho — el flex-item
+ * por defecto (`0 1 auto`) ya hace que ocupe solo lo que necesita, sin
+ * encogerse gracias a `flex-shrink: 0`.
+ */
+.map__theme-toggle {
+  flex-shrink: 0;
+  margin: 0;
+  --border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
 .map__errors {
   position: absolute;
   bottom: 12px;
