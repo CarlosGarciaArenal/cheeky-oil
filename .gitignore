@@ -92,6 +92,12 @@ firebase-debug.log
 src/environments/environment.ts
 src/environments/environment.prod.ts
 
+# google-services.json (Push Notifications, [[12-push-notifications]]): identifica
+# el proyecto de Firebase para el build nativo Android. Cada dev/entorno debe
+# copiar el suyo a mano en android/app/ tras `npx cap add android` (no existe
+# un "example" genérico porque el fichero real depende del proyecto Firebase).
+android/app/google-services.json
+
 # Archivos del Sistema Operativo
 .DS_Store
 Thumbs.db

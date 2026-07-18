@@ -1,5 +1,7 @@
-import { Component, inject } from '@angular/core';
+import { Component, DestroyRef, effect, inject } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { PushNotifications, type Token } from '@capacitor/push-notifications';
 import {
   IonApp,
   IonButton,
@@ -35,13 +37,62 @@ export class AppComponent {
    * inmediato, sin esperar a que ninguna otra vista lo inyecte primero.
    */
   private readonly themeService = inject(ThemeService);
+  private readonly destroyRef = inject(DestroyRef);
+
+  /** Evita repetir el registro de push en cada reevaluación del `effect()` mientras la sesión sigue activa. */
+  private pushInitialized = false;
+  private registrationListener?: PluginListenerHandle;
+  private registrationErrorListener?: PluginListenerHandle;
 
   constructor() {
     addIcons({ logOutOutline, navigateOutline, starOutline });
+
+    /**
+     * Push Notifications (empaquetado nativo, `[[12-push-notifications]]`).
+     * `Capacitor.isNativePlatform()` es obligatorio: en web este plugin no
+     * tiene implementación real y llamarlo sin la guarda lanza
+     * "not implemented on web". Se dispara a partir de `currentUser()`
+     * (no directamente en el constructor) a propósito: pedir el permiso de
+     * notificaciones ANTES de que exista sesión guardaría un token que
+     * `AuthService.saveFcmToken()` no podría asociar a ningún usuario
+     * (no-op silencioso, ver su documentación) — y el evento 'registration'
+     * no vuelve a dispararse solo porque el usuario haga login después.
+     */
+    effect(() => {
+      if (Capacitor.isNativePlatform() && this.authService.currentUser() && !this.pushInitialized) {
+        this.pushInitialized = true;
+        void this.initPushNotifications();
+      }
+    });
+
+    this.destroyRef.onDestroy(() => {
+      void this.registrationListener?.remove();
+      void this.registrationErrorListener?.remove();
+    });
   }
 
   protected async onLogout(): Promise<void> {
     await this.authService.logout();
     await this.router.navigateByUrl('/login', { replaceUrl: true });
+  }
+
+  /**
+   * Solicita permiso, se suscribe a 'registration'/'registrationError' y
+   * registra el dispositivo. Si el usuario deniega el permiso, no se llega
+   * a llamar `register()` (evita un registro nativo inútil sin forma de
+   * recibir notificaciones).
+   */
+  private async initPushNotifications(): Promise<void> {
+    const permission = await PushNotifications.requestPermissions();
+    if (permission.receive !== 'granted') return;
+
+    this.registrationListener = await PushNotifications.addListener('registration', (token: Token) => {
+      void this.authService.saveFcmToken(token.value);
+    });
+    this.registrationErrorListener = await PushNotifications.addListener('registrationError', (error) => {
+      console.error('Error al registrar notificaciones push:', error);
+    });
+
+    await PushNotifications.register();
   }
 }

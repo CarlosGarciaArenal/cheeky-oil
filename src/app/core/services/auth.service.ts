@@ -8,7 +8,7 @@ import {
   signOut,
   user,
 } from '@angular/fire/auth';
-import { Firestore, doc, getDoc } from '@angular/fire/firestore';
+import { Firestore, doc, getDoc, setDoc } from '@angular/fire/firestore';
 
 /** Ruta fija del documento de configuración que guarda el código familiar (RNF-08, `[[05b-registro-seguro]]`). */
 const SECURITY_CONFIG_PATH = 'config/security';
@@ -74,5 +74,26 @@ export class AuthService {
 
   getCurrentUser(): User | null {
     return this.auth.currentUser;
+  }
+
+  /**
+   * Guarda el token FCM del dispositivo en `users/{uid}` (RF push notifications,
+   * `[[12-push-notifications]]`). `setDoc` con `merge: true` (no `updateDoc`)
+   * porque ese documento raíz no tiene por qué existir todavía — ningún otro
+   * código del proyecto lo crea hoy (ver `[[11-firestore-security-rules]]`,
+   * punto 3) — así que `merge: true` lo crea la primera vez y solo pisa el
+   * campo `fcmToken` en las siguientes, sin arriesgarse a un `updateDoc` que
+   * fallaría si el documento no existe.
+   *
+   * Silenciosamente no-op si no hay sesión activa: `PushNotifications.register()`
+   * solo se invoca tras el login (`AppComponent`), pero un evento 'registration'
+   * tardío podría, en teoría, llegar durante un logout en curso.
+   */
+  async saveFcmToken(token: string): Promise<void> {
+    const uid = this.auth.currentUser?.uid;
+    if (!uid) return;
+
+    const userDocRef = doc(this.firestore, 'users', uid);
+    await setDoc(userDocRef, { fcmToken: token }, { merge: true });
   }
 }

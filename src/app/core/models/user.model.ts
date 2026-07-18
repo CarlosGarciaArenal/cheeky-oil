@@ -22,4 +22,13 @@ export interface AppUser {
    */
   gasolinerasGuardadasIds: string[];
   creadoEn: number;
+  /**
+   * Token FCM del dispositivo nativo actual (`[[12-push-notifications]]`).
+   * Opcional: solo existe tras el primer registro de push notifications en
+   * una build nativa (Android) — nunca se escribe en web. Se sobrescribe en
+   * cada `register()` (un usuario con varios dispositivos solo conserva el
+   * token del último con el que se autenticó; suficiente para el caso de uso
+   * personal/familiar de la app, ver `CLAUDE.md`).
+   */
+  fcmToken?: string;
 }
