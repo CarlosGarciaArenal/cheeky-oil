@@ -291,3 +291,64 @@ Metodología: a diferencia de la auditoría anterior de este documento (sin cred
 ### Veredicto final
 
 **Aprobado para commit.** La corrección de la recarga de página (import de `FormsModule`) queda confirmada de extremo a extremo con una prueba real en navegador: cero eventos de navegación provocados por el click, `calculateRoute()` completa sus 4 fases con datos reales y consistentes, el resultado se refleja correctamente en el DOM, y no hay ningún error de consola. Sin hallazgos bloqueantes.
+
+---
+
+## Corrección: cálculo de ruta no funcionaba en Android (`http://` → `https://` en OSRM)
+
+**Rol:** [ARQUITECTO]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/core/services/routing.service.ts`
+
+### El problema
+
+"Funciona en web, falla en Android" — mismo patrón que la geolocalización (`docs/features/02-mapa-base.md`), esta vez en la capa de red. `OSRM_URL` apuntaba a `http://router.project-osrm.org` (sin TLS), el ÚNICO endpoint `http://` de todo `src/` — confirmado con `grep -RIn "http://|https://" src` — mientras que Nominatim, las teselas de OpenStreetMap y MITECO ya usaban `https://`.
+
+`AndroidManifest.xml` no declara `android:usesCleartextTraffic` ni un `networkSecurityConfig` (confirmado leyendo el manifiesto). Con el `targetSdkVersion` moderno que usa Capacitor 8, Android bloquea por defecto cualquier conexión HTTP sin cifrar que la app intente abrir (`ERR_CLEARTEXT_NOT_PERMITTED`) — la petición a OSRM fallaba silenciosamente en el paso 2 de `calculateRoute()` ("Trazando ruta OSRM..."), cayendo al mensaje genérico de error. En el navegador de escritorio usado en desarrollo web no existe esa misma restricción de red a nivel de proceso, por eso el síntoma solo aparecía en la app empaquetada.
+
+### La corrección
+
+```ts
+const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving';
+```
+
+1. **Un solo carácter de diferencia (`http` → `https`), no una excepción de seguridad.** La alternativa habría sido declarar un `networkSecurityConfig` permitiendo cleartext solo para `router.project-osrm.org` — descartada a propósito: habría mantenido una conexión sin cifrar (datos de origen/destino del usuario viajando en claro) y habría requerido tocar `AndroidManifest.xml`/añadir un XML nuevo, todo para un problema que el propio servidor ya resuelve sirviendo TLS.
+2. **Verificado que es el MISMO servidor con contenido IDÉNTICO en ambos esquemas**, no solo que "debería funcionar": petición real a `http://router.project-osrm.org/route/v1/driving/-3.7038,40.4168;-3.6,40.5?overview=false` y a la misma URL con `https://` — mismo `code:"Ok"`, mismo `hint` de waypoint, misma distancia/duración, respuesta byte a byte idéntica. Cambiar el esquema no cambia el comportamiento del servicio, solo cómo viaja cifrado.
+3. **Mejora la seguridad en vez de solo evitar el bloqueo:** las coordenadas de origen/destino (potencialmente la ubicación exacta del usuario, si usó "Usar mi ubicación") ya no viajan sin cifrar por la red — corrige un problema de exposición de datos que existía también en web, aunque ahí pasara desapercibido por no estar bloqueado.
+4. **Sin tocar `AndroidManifest.xml` ni añadir configuración de red nueva** — la postura de seguridad por defecto de Android (bloquear cleartext) se mantiene intacta para el resto de la app; no se abre ninguna excepción.
+
+---
+
+## Auditoría [REVIEWER]: `https://` en OSRM
+
+**Rol:** [REVIEWER]
+**Archivo auditado:**
+- `src/app/core/services/routing.service.ts`
+
+### 1. ¿La corrección soluciona la causa raíz sin introducir riesgos de seguridad nuevos?
+
+- [x] **Causa raíz confirmada por lectura de código, no solo hipótesis:** `AndroidManifest.xml` sin `usesCleartextTraffic`/`networkSecurityConfig` + `OSRM_URL` en `http://` = combinación que Android bloquea por defecto en dispositivos/emuladores reales. Único endpoint `http://` de `src/` (búsqueda explícita `grep -RIn "http://|https://" src`, 0 coincidencias adicionales de esquema inseguro en llamadas de red — el resto de resultados `http://www.w3.org/...` son namespaces XML de un SVG inline, no peticiones de red).
+- [x] **Equivalencia funcional del servidor verificada empíricamente, no asumida:** dos peticiones reales (`http://` y `https://`) a la misma ruta OSRM devolvieron una respuesta JSON idéntica byte a byte. Descarta que el cambio de esquema introduzca una regresión silenciosa (ej. una instancia HTTPS desactualizada o con datos distintos).
+- [x] **No se debilita la seguridad de la app para conseguir el fix.** Se descartó la alternativa de añadir una excepción de cleartext en `networkSecurityConfig` — la corrección elegida en su lugar MEJORA la seguridad (coordenadas de origen/destino cifradas en tránsito) en vez de abrir una excepción nueva.
+- [x] **`AndroidManifest.xml` queda sin cambios** — confirmado que la política de red por defecto de Android (bloquear cleartext) se mantiene para el resto de la app.
+
+**Veredicto punto 1: correcto. Corrige la causa raíz confirmada por código y por prueba real contra el servidor, sin introducir ninguna excepción de seguridad.**
+
+### 2. ¿Sigue habiendo coste cero y sin regresión en `RoutingService`?
+
+- [x] **Mismo servidor, mismo `OSRM_URL` base (solo el esquema cambia)** — sigue siendo el servidor de demostración público y gratuito de OSRM, sin API key, sin límite de peticiones distinto al que ya existía.
+- [x] **`geocode()` (Nominatim) y `filterStationsAlongRoute()` (Turf.js, cálculo local) sin cambios** — el diff se limita a la constante `OSRM_URL`, ningún otro método de `RoutingService` se tocó.
+- [x] **`getRoute()` sigue construyendo la URL de la misma forma** (`${OSRM_URL}/${start.lon},${start.lat};${end.lon},${end.lat}`) — el cambio de esquema es transparente para el resto del método, sin necesidad de tocar la lógica de parámetros (`overview=full`, `geometries=geojson`) ni el manejo de `respuesta.code !== 'Ok'`.
+
+**Veredicto punto 2: correcto, sin regresión ni impacto en costes.**
+
+### Otras comprobaciones realizadas
+
+- [x] **`npx tsc --noEmit`**, **`npm run lint`** y **`ng build --configuration development`** ejecutados sobre el estado final: sin errores.
+- [x] **`MapComponent` no se ve afectado** (no usa `RoutingService`); `RoutePlannerPage` no requiere ningún cambio, mismo criterio que la corrección de `LocationService`: la interfaz pública de `RoutingService` (`getRoute(start, end): Observable<RouteResult>`) no cambió.
+- [ ] ⚠️ **No verificado en un dispositivo/emulador Android real (misma limitación de entorno ya documentada en la corrección de `LocationService`):** no es posible compilar/instalar el APK desde aquí para confirmar visualmente que `calculateRoute()` ya no falla en la app empaquetada. La corrección se valida por (a) lectura directa de `AndroidManifest.xml` confirmando la ausencia de la excepción de cleartext que causaría el bloqueo, y (b) una petición real de red confirmando que `https://router.project-osrm.org` es el mismo servicio con contenido idéntico — no solo por documentación de terceros sobre el comportamiento de Android.
+
+### Veredicto final
+
+**Aprobado para commit.** La causa raíz (única llamada de red sin TLS de toda la app, bloqueada por la política de cleartext por defecto de Android — ausente de excepción en `AndroidManifest.xml`) se confirma por lectura de código y se corrige cambiando el esquema a `https://`, verificado como el mismo servidor con respuesta idéntica mediante una petición real. La corrección no solo evita el bloqueo: mejora la seguridad (datos de ubicación cifrados en tránsito) sin abrir ninguna excepción de red nueva ni tocar `AndroidManifest.xml`. Pendiente no bloqueante: confirmación manual del usuario en un dispositivo/emulador Android real.

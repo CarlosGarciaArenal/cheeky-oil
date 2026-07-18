@@ -25,8 +25,21 @@ const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
  * `CLAUDE.md`); si el uso creciera, la migración natural sería una instancia
  * propia de OSRM (self-hosted, sigue siendo coste cero de licencia) antes
  * que un proveedor de pago.
+ *
+ * **`https://`, no `http://`.** El mismo servidor sirve ambos esquemas con
+ * contenido idéntico (verificado con una petición real: mismo JSON byte a
+ * byte), pero `AndroidManifest.xml` no declara `usesCleartextTraffic` ni un
+ * `networkSecurityConfig` — con `targetSdkVersion` moderno, Android bloquea
+ * por defecto cualquier tráfico HTTP sin cifrar del proceso de la app
+ * (`ERR_CLEARTEXT_NOT_PERMITTED`), a diferencia del navegador de escritorio
+ * usado en desarrollo web, donde esa petición sí pasa. Era el ÚNICO endpoint
+ * `http://` de todo `src/` (Nominatim, teselas OSM y MITECO ya usaban
+ * `https://`) — mismo patrón de fallo "funciona en web, falla en Android"
+ * que la migración de `LocationService` a `@capacitor/geolocation`, esta vez
+ * en la capa de red en vez de en la de permisos (ver
+ * `docs/features/09-rutas.md`).
  */
-const OSRM_URL = 'http://router.project-osrm.org/route/v1/driving';
+const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving';
 
 /**
  * Tolerancia de simplificación de la ruta (`turf.simplify`, ver
