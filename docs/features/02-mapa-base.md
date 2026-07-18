@@ -310,8 +310,124 @@ Resultado: `{ ok: true }` en las tres comprobaciones, cero errores de página (`
 
 ---
 
+## Corrección: geolocalización no funcionaba en Android (migración a `@capacitor/geolocation`)
+
+**Rol:** [ARQUITECTO]
+**Estado:** Corregido
+**Archivo modificado:**
+- `src/app/core/services/location.service.ts`
+
+### El problema
+
+En web, `LocationService` funcionaba correctamente usando `navigator.geolocation` directamente. Al empaquetar la app con Capacitor para Android (`android/`, ver commit `feat(mobile): Capacitor Android integrado...`), la ubicación dejaba de obtenerse de forma fiable: el WebView de Android no siempre dispara correctamente el diálogo nativo de permisos ni entrega un fix de GPS a través de la Geolocation API "pura" del navegador — es una limitación conocida de esa API dentro de un WebView empaquetado (a diferencia de un navegador Chrome/Firefox de verdad).
+
+`@capacitor/geolocation` (`^8.2.0`) ya estaba en `package.json` y los permisos de Android ya estaban declarados en `AndroidManifest.xml` (`ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `android.hardware.location.gps`), pero `LocationService` nunca llegó a adoptar el plugin — seguía llamando a `navigator.geolocation` a pelo.
+
+### La corrección
+
+`LocationService` ahora obtiene las coordenadas a través del plugin `Geolocation` de `@capacitor/geolocation` en vez de `navigator.geolocation` directamente. Verificado leyendo el propio código fuente del plugin (`node_modules/@capacitor/geolocation`):
+
+- **Web** (`dist/esm/web.js`): el plugin delega internamente en `navigator.geolocation.getCurrentPosition`/`watchPosition`/`clearWatch` y reenvía el error del navegador tal cual (con su `code` numérico 1/2/3 de siempre) — el comportamiento en navegador **no cambia**.
+- **Android** (`GeolocationPlugin.kt`): antes de pedir la posición comprueba el estado del permiso y dispara el diálogo nativo (`requestPermissionForAlias`) si no está concedido — soluciona exactamente el problema descrito arriba, sin que la app tenga que gestionar el permiso a mano.
+- **Errores nativos** (`GeolocationErrors.kt`): usan un `code` de tipo *string* (`OS-PLUG-GLOC-0002/0003/0007/0010`), distinto del `code` numérico del navegador. `toError()` ahora entiende ambos formatos.
+
+```mermaid
+classDiagram
+    class Coordinates {
+        +number lat
+        +number lng
+    }
+
+    class LocationOptions {
+        +boolean enableHighAccuracy
+        +number timeoutMs
+        +number maximumAgeMs
+    }
+
+    class LocationService {
+        +isSupported() boolean
+        +getCurrentPosition(options: LocationOptions) Observable~Coordinates~
+        +watchPosition(options: LocationOptions) Observable~Coordinates~
+        -toCoordinates(position: Position) Coordinates
+        -toError(error: unknown) Error
+    }
+
+    class GeolocationPlugin {
+        <<@capacitor/geolocation>>
+        +getCurrentPosition(options) Promise~Position~
+        +watchPosition(options, callback) Promise~CallbackID~
+        +clearWatch(options) Promise~void~
+    }
+
+    LocationService ..> Coordinates : emite
+    LocationService ..> LocationOptions : configura con
+    LocationService ..> GeolocationPlugin : usa (web: navigator.geolocation · nativo: GPS + permiso del SO)
+```
+
+### Justificación de Diseño (enfoque Coste Cero)
+
+1. **Sin rama `Capacitor.isNativePlatform()`.** A diferencia de `PushNotifications` en `app.component.ts` (que sí necesita esa comprobación porque el plugin no tiene implementación web), `@capacitor/geolocation` unifica ambas plataformas bajo la misma API — un único camino de código sirve para web y Android, manteniendo `LocationService` simple.
+2. **Cero dependencias nuevas.** `@capacitor/geolocation` ya figuraba en `package.json` (añadido junto al resto de plugins de Capacitor en la integración móvil) — esta corrección solo cablea código que ya estaba disponible, no añade ninguna librería ni servicio de pago.
+3. **Interfaz pública de `LocationService` sin cambios** (`Coordinates`, `LocationOptions`, `isSupported()`, `getCurrentPosition()`, `watchPosition()`). `MapComponent` y `RoutePlannerPage` —los dos consumidores actuales— no requieren ningún cambio.
+4. **`watchPosition()` sigue liberando el GPS automáticamente al desuscribirse**, ahora con una salvedad nueva: el registro del watcher (`Geolocation.watchPosition(...)`) es asíncrono (`Promise<CallbackID>`), a diferencia del `navigator.geolocation.watchPosition` síncrono de antes. Se añadió un flag `cancelled` para cubrir la ventana en la que el `Observable` se desuscribe ANTES de que esa promesa resuelva: en cuanto llega el id, se limpia inmediatamente si ya se había pedido cancelar — sin este flag, desuscribirse muy rápido dejaría un watcher de GPS huérfano (fuga de batería).
+
+---
+
+## Auditoría [REVIEWER]: migración a `@capacitor/geolocation`
+
+**Rol:** [REVIEWER]
+**Archivo auditado:**
+- `src/app/core/services/location.service.ts`
+
+### Hallazgo de esta auditoría (corregido antes de aprobar)
+
+⚠️→✅ **`watchPosition()` podía quedarse colgado sin emitir error si Android denegaba el permiso.** Leyendo el código fuente nativo del plugin (`GeolocationPlugin.kt`, Android): el permiso se comprueba envolviendo TODO `startWatch()` en `handlePermissionRequest(...)`; si el usuario deniega el permiso, `call.sendError(LOCATION_PERMISSIONS_DENIED)` se dispara como la PRIMERA y ÚNICA respuesta de esa llamada, **antes** de que `startWatch()` llegara a marcarla como "keepAlive" (el canal por el que, una vez abierto, llegarían los `error` sucesivos al callback `(position, error) => …`). Consecuencia real verificada por lectura de código: ese primer rechazo se entrega como el rechazo de la propia promesa de registro `Geolocation.watchPosition(...)`, no como un `error` del callback — y la implementación original de este ciclo solo tenía `.then(...)` en esa promesa, sin `.catch(...)`. Un permiso denegado en Android habría producido una promesa rechazada sin gestionar y el `Observable` se habría quedado colgado para siempre, sin que `subscriber.error(...)` se llamara nunca (el consumidor jamás se habría enterado del permiso denegado).
+
+**Corrección aplicada en esta misma auditoría:** se añadió `.catch((error) => subscriber.error(this.toError(error)))` a la cadena de la promesa de registro. Impacto actual en producción: **ninguno todavía** — `watchPosition()` no lo consume ningún componente hoy (`getCurrentPosition()` es lo único en uso en `MapComponent`/`RoutePlannerPage`, ver "Próximos pasos"), pero es API pública del servicio y el hallazgo habría bloqueado la primera vez que se usara. Re-verificado `tsc --noEmit` / `npm run lint` / `ng build` tras el fix: sin errores.
+
+### 1. ¿Se destruyen los recursos correctamente (memory leaks / fugas de GPS)?
+
+- [x] **`getCurrentPosition()` sigue completándose tras la primera emisión** (`subscriber.complete()` en el `.then`), sin dejar ningún watcher activo — igual que antes.
+- [x] **`watchPosition()` sigue limpiando con `Geolocation.clearWatch({ id })` en la función de teardown** del `Observable`, invocada automáticamente por `takeUntilDestroyed()` en los consumidores.
+- [x] **Race del registro asíncrono cubierta.** Al ser `Geolocation.watchPosition(...)` una `Promise<CallbackID>` (no síncrona como `navigator.geolocation.watchPosition`), si el consumidor se desuscribe antes de que esa promesa resuelva, la función de teardown se ejecutaría con `watchId` todavía en `null` y no llamaría a `clearWatch`. El flag `cancelled` (comprobado en el `.then` de registro) cierra ese hueco: en cuanto llega el id, se limpia inmediatamente. Si la promesa de registro se rechaza (ver hallazgo de arriba), `watchId` nunca llega a asignarse y no hay watcher real que limpiar — `clearWatch` correctamente NO se invoca en ese caso.
+- [x] **Sin nuevos listeners/observers globales.** El plugin no añade ningún listener persistente fuera del ciclo de vida de cada llamada (a diferencia de `PushNotifications` en `app.component.ts`, que sí registra listeners globales gestionados aparte).
+
+**Veredicto punto 1: correcto tras el fix aplicado en esta auditoría — sin fugas de GPS/batería, incluidas la condición de carrera del registro asíncrono y el rechazo temprano de esa misma promesa por permiso denegado.**
+
+### 2. ¿Se manejan los permisos de geolocalización y los errores?
+
+- [x] **`isSupported()` cubre ambas plataformas:** `Capacitor.isNativePlatform()` para nativo (donde el plugin gestiona permiso/GPS internamente) y la comprobación previa de `navigator.geolocation` para web, sin regresión respecto al comportamiento anterior.
+- [x] **`toError()` cubre AMBOS formatos de error verificados en el código fuente del plugin:** códigos numéricos 1/2/3 (web, reenviados del navegador) y códigos string `OS-PLUG-GLOC-0002/0003/0007/0010` (nativo). Caso nuevo cubierto que no existía antes: "servicios de ubicación desactivados en el dispositivo" (`OS-PLUG-GLOC-0007`), relevante en Android si el usuario tiene el GPS del sistema apagado (no solo el permiso de la app).
+- [x] **`default` usa `error.message` si el plugin lo provee**, en vez de perder información — antes el `default` era siempre un mensaje genérico fijo.
+- [x] **El permiso nativo de Android se solicita automáticamente** (confirmado leyendo `GeolocationPlugin.kt`: comprueba el estado del permiso y llama a `requestPermissionForAlias` antes de resolver la posición) — soluciona la causa raíz de este ciclo sin que la app tenga que orquestar el diálogo de permisos a mano.
+
+- [x] **Permiso denegado en `watchPosition()` en Android ahora sí llega a `subscriber.error()`** (hallazgo y fix de esta misma auditoría, ver arriba) — antes de este fix era el único caso de error que se perdía silenciosamente.
+
+**Veredicto punto 2: correcto, cobertura de errores ampliada respecto al ciclo anterior sin perder ningún caso ya manejado.**
+
+### 3. ¿Se ha usado alguna API de pago?
+
+- [x] **`@capacitor/geolocation` es un plugin oficial de Capacitor (MIT), sin API key ni cuota.** Ya figuraba en `package.json` antes de este cambio (parte de la integración móvil ya realizada); esta corrección no añade ninguna dependencia nueva, solo empieza a usar la que ya estaba instalada.
+- [x] **En web sigue delegando en `navigator.geolocation`** (verificado en el propio código fuente del plugin), API nativa del navegador sin coste.
+- [x] **En Android usa el GPS del dispositivo vía Android Location Services**, sin ningún SDK de terceros de pago (no usa Google Play Services de facturación, solo el `LocationManager`/`FusedLocationProvider` estándar que ya cubren los permisos declarados en el manifiesto).
+
+**Veredicto punto 3: confirmado, coste cero. Ninguna API de pago en uso.**
+
+### Otras comprobaciones realizadas
+
+- [x] **`npx tsc --noEmit`**, **`npm run lint`** y **`ng build --configuration development`** ejecutados sobre el estado final: sin errores.
+- [x] **`MapComponent` y `RoutePlannerPage` (los dos consumidores de `LocationService`) compilan sin haber sido tocados**, confirmando que la interfaz pública del servicio no cambió.
+- [ ] ⚠️ **No verificado en un dispositivo/emulador Android real (limitación de este entorno de desarrollo):** no es posible compilar ni instalar el APK desde aquí para confirmar visualmente que el diálogo de permisos nativo aparece y que se obtiene un fix de GPS real en el WebView empaquetado. La corrección se valida por lectura directa del código fuente del plugin (comportamiento de `GeolocationPlugin.kt` y `web.js`, no documentación de terceros) y por build/lint/type-check limpios — mismo criterio de honestidad ya aplicado en la corrección del `ResizeObserver` de este mismo documento.
+
+### Veredicto final
+
+**Aprobado para commit, pendiente de confirmación manual del usuario en un dispositivo/emulador Android.** La causa raíz (uso directo de `navigator.geolocation`, poco fiable dentro del WebView de Capacitor para gestionar el permiso nativo) se resuelve adoptando el plugin `@capacitor/geolocation` que ya estaba instalado — sin añadir dependencias, sin coste, y sin cambiar la interfaz pública que consumen `MapComponent`/`RoutePlannerPage`. Esta auditoría encontró y corrigió un fallo real antes de aprobar (permiso denegado en `watchPosition()` en Android dejaba el `Observable` colgado sin emitir error, por falta de un `.catch()` en la promesa de registro del watcher — ver "Hallazgo de esta auditoría" arriba); sin ese fix no se habría aprobado el commit. Queda como pendiente NO bloqueante que el usuario confirme en un dispositivo Android real que el permiso se solicita correctamente y que el mapa se centra en su ubicación.
+
+---
+
 ## Próximos pasos (fuera de alcance de este documento)
 
 - [UI-DEV] (futuro): usar `watchPosition()` para actualizar el marcador de "mi ubicación" en tiempo real (reutilizando el marcador con `setLatLng`, ver nota de la auditoría), y renderizar marcadores de `GasStation` sobre el mapa.
 - [REVIEWER] (futuro): revisar cobertura de tests unitarios de `LocationService`/`MapComponent` cuando se añadan.
 - [Usuario]: confirmar en un dispositivo/navegador real, con sesión iniciada, que volver de `/favoritos` a `/home` ya no rompe el mapa (la verificación de esta corrección fue del mecanismo de Leaflet en aislado, no un recorrido logueado de la app real — ver justificación en la sección de Verificación de arriba).
+- [Usuario]: confirmar en un dispositivo/emulador Android real que, tras la migración a `@capacitor/geolocation`, aparece el diálogo nativo de permiso de ubicación y el mapa se centra correctamente en el fix de GPS (ver pendiente ⚠️ de la auditoría "migración a `@capacitor/geolocation`" — no verificable desde este entorno de desarrollo).
