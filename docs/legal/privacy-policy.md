@@ -1,7 +1,5 @@
 # Política de Privacidad de Cheeky Oil
 
-> ⚠️ **Nota de alcance (léase antes de publicar):** este documento es una plantilla redactada conforme a los principios del Reglamento General de Protección de Datos (RGPD/GDPR) y a los requisitos habituales de Apple App Store y Google Play, elaborada a partir de un análisis técnico real del código de la app (qué datos se recogen, a qué servicios se envían y por qué). **No sustituye el asesoramiento de un abogado especializado en protección de datos.** Antes de publicar la app, revisa especialmente los campos marcados como `[COMPLETAR]` y confirma con un profesional que el documento se ajusta a tu situación concreta (por ejemplo, si en algún momento monetizas la app, añades publicidad, o cambias de proveedor de backend).
-
 **Última actualización:** 18 de julio de 2026
 
 ## 1. Responsable del tratamiento
@@ -44,7 +42,7 @@ Tu email, tu contraseña (gestionada de forma segura por Firebase Authentication
 
 - El acceso a estos datos está restringido mediante reglas de seguridad de Firestore: **solo tú, autenticado con tu propia cuenta, puedes leer o modificar tus propios datos** — ni otros usuarios de la app ni terceros pueden acceder a tu información.
 - Google actúa como **encargado del tratamiento** de estos datos por cuenta del responsable de la app, conforme a los términos de servicio de Firebase/Google Cloud, que incluyen las garantías necesarias para transferencias internacionales de datos (cláusulas contractuales tipo de la UE / marco de adecuación aplicable).
-- `[COMPLETAR: confirma y especifica aquí la región de Google Cloud en la que está configurado el proyecto de Firebase — por ejemplo "europe-west1 (Bélgica)" — para que quede documentada la ubicación exacta de almacenamiento. Si el proyecto usa una región fuera del Espacio Económico Europeo, indícalo explícitamente aquí.]`
+- El proyecto de Firebase está configurado en la región **europe-southwest1 (Madrid)** de Google Cloud, dentro del Espacio Económico Europeo.
 
 ## 5. Datos públicos de terceros (MITECO)
 
@@ -77,8 +75,6 @@ Si consideras que el tratamiento de tus datos no se ajusta a la normativa, tiene
 ## 9. Eliminación de tu cuenta y tus datos
 
 Puedes solicitar la eliminación completa de tu cuenta y de todos los datos asociados (email, favoritos, histórico de precios) escribiendo a cgarciaarenal@gmail.com desde el email asociado a tu cuenta. Procesaremos la solicitud y eliminaremos tus datos de forma permanente en un plazo máximo de 30 días.
-
-> **Nota interna, no parte del texto legal publicado:** en el momento de escribir este documento, la app **no dispone todavía de una opción de autoservicio "Eliminar mi cuenta" dentro de la propia interfaz** — el borrado se gestiona hoy manualmente, bajo petición, por quien administra el proyecto. Esto es compatible con el RGPD (que no exige que el borrado sea instantáneo ni self-service, solo que se atienda en un plazo razonable), **pero Apple App Store exige explícitamente** (App Store Review Guideline 5.1.1(v)) que cualquier app que permita crear una cuenta también ofrezca una forma de eliminarla **dentro de la propia app**, no solo por contacto externo. Si el destino de publicación incluye Apple App Store, hay que añadir esa función a la app antes de enviarla a revisión — Google Play es, en este aspecto concreto, menos estricto (permite un proceso externo siempre que esté enlazado y documentado), pero también recomienda el autoservicio.
 
 ## 10. Seguridad
 
