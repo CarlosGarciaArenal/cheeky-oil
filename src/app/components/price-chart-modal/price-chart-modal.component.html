@@ -1,6 +1,9 @@
 <ion-header>
   <ion-toolbar>
-    <ion-title>{{ title }} — {{ fuelLabel }}</ion-title>
+    <ion-title size="small" class="price-chart-modal__title">
+      <span class="price-chart-modal__title-main">{{ title }}</span>
+      <span class="price-chart-modal__title-fuel">{{ fuelLabel }}</span>
+    </ion-title>
     <ion-buttons slot="end">
       <ion-button (click)="dismiss()" aria-label="Cerrar">
         <ion-icon slot="icon-only" name="close-outline"></ion-icon>

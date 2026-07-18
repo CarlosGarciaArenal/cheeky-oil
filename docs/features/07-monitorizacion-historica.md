@@ -389,3 +389,78 @@ Metodología: lectura de código fuente real (no solo su documentación), trazan
 ### Veredicto final
 
 **Aprobado para commit.** (1) Las claves de `prices` provienen de un `type FuelType` cerrado de 3 literales hardcodeados en el código fuente (`miteco.service.ts`), nunca de datos externos — no hay vía para que un carácter inválido o un nombre reservado llegue a Firestore. (2) El flujo abrir→cerrar→cambiar filtro→reabrir funciona correctamente: cada apertura lee `selectedFuel()` en el momento del clic y crea una instancia nueva y sin estado compartido del modal, y el cierre destruye de verdad la instancia anterior (evidencia ya asentada en la auditoría previa). Sin hallazgos bloqueantes. Queda como pendiente no bloqueante una confirmación empírica directa con Playwright del flujo completo (no realizada en este ciclo, solo por trazado de código).
+
+---
+
+## Corrección: título de la gráfica cortado con "…" en móvil, sin forma de leerlo entero
+
+**Rol:** [UI-DEV]
+**Estado:** Corregido
+**Archivos modificados:**
+- `src/app/components/price-chart-modal/price-chart-modal.component.html`
+- `src/app/components/price-chart-modal/price-chart-modal.component.scss`
+
+### El problema
+
+Reportado por el usuario: en móvil, el título de `PriceChartModalComponent` (compartido por la gráfica individual, `openStationHistory` → "Evolución de precio — {{marca}}", y la general, `openGeneralHistory` → "Evolución general de tus favoritas") no cabe en una línea. `<ion-title>` trunca con "…" por defecto (`white-space: nowrap; text-overflow: ellipsis; overflow: hidden`, confirmado en el propio CSS fuente de Ionic, `node_modules/@ionic/core/dist/collection/components/title/title.md.css`) — y a diferencia de un `title="..."` HTML (tooltip al pasar el ratón), en una pantalla táctil no hay ningún gesto que revele el texto cortado: el usuario literalmente no podía leerlo de ninguna forma, tal como describía.
+
+### La corrección
+
+```html
+<ion-title size="small" class="price-chart-modal__title">
+  <span class="price-chart-modal__title-main">{{ title }}</span>
+  <span class="price-chart-modal__title-fuel">{{ fuelLabel }}</span>
+</ion-title>
+```
+
+1. **`size="small"` es la variante que el propio Ionic ya implementa para permitir que un título envuelva en varias líneas en vez de truncarse — no una propiedad CSS que se pueda fijar desde fuera.** `ion-title` usa Shadow DOM real (`encapsulation: 'shadow'`, confirmado en `node_modules/@ionic/core/components/ion-title.js`), y el `<div class="toolbar-title">` interno que aplica el `nowrap`/`ellipsis` NO expone ningún `::part()` sobre el que este componente pueda escribir CSS desde fuera — ni siquiera `::ng-deep` sirve aquí, porque no pincha una Shadow DOM real ajena a Angular, solo el propio scoping de vistas de Angular. La única palanca soportada es la regla que el propio Ionic ya trae para este caso exacto: `:host(.title-small) .toolbar-title { white-space: normal; }` (verificado leyendo ese CSS fuente). Se prefiere activar el mecanismo oficial del framework antes que pelear contra su encapsulación con hacks fráncos.
+2. **Título y combustible en DOS líneas separadas, no concatenados con un guión largo como antes (`{{ title }} — {{ fuelLabel }}`).** Cada texto es, por separado, sensiblemente más corto que la cadena combinada — en la práctica, esto solo ya evita el desbordamiento en la inmensa mayoría de los casos reales (nombres de marca normales). El combustible, además, queda visualmente diferenciado como texto secundario (más pequeño, `--ion-color-medium`, *theme-aware* en claro/oscuro) en vez de fundido con el título en la misma frase.
+3. **`overflow-wrap: break-word` en la línea principal como red de seguridad para el caso extremo** (un nombre de gasolinera/municipio excepcionalmente largo que por sí solo no quepa ni siquiera en dos líneas) — para que ese caso límite envuelva a una tercera línea en vez de desbordar horizontalmente, en vez de asumir que "dividir en dos líneas" basta siempre por construcción.
+4. **El tamaño/peso de fuente por defecto de `size="small"` (pensado por Ionic para texto secundario, más pequeño) se sobreescribe explícitamente en `.price-chart-modal__title-main`/`-fuel`.** Esto SÍ es posible sin pelear con la Shadow DOM: los `<span>` son contenido "slotted" (DOM normal de este componente, no de Ionic) y admiten CSS propio sin restricción — se usa `size="small"` solo por su comportamiento de ENVOLTURA, no por su tipografía por defecto, que se reemplaza por una jerarquía visual propia (título 1.0625rem/600, combustible 0.8125rem/400) para que siga leyéndose como un título de verdad, no como una etiqueta secundaria diminuta.
+5. **`ion-toolbar` no tiene una altura fija, solo `--min-height`** (confirmado en `toolbar.md.css`/`toolbar.ios.css`: únicamente `min-height: var(--min-height)`, sin `height`) — crece automáticamente para caber en 2 o más líneas sin necesidad de tocar ninguna variable de altura a mano; el botón de cerrar permanece centrado verticalmente en el toolbar ya crecido porque el propio contenedor usa `align-items: center`.
+
+### Verificación
+
+Sin credenciales de cuenta de prueba disponibles en este ciclo (mismo motivo ya documentado en auditorías anteriores de este mismo archivo), la verificación se hizo reproduciendo el MECANISMO exacto con los componentes web reales de Ionic (`@ionic/core`, misma versión que usa el proyecto, cargados vía su propio bundle `dist/ionic/ionic.esm.js`, el registrador real de custom elements — no una copia/simulación del CSS) en un navegador real (Playwright), sirviendo dos páginas HTML mínimas (ANTES/DESPUÉS) desde un servidor estático temporal apuntando a la raíz del repo, sin tocar Angular/Firebase. Ambos archivos temporales y el servidor se eliminaron/detuvieron antes de terminar, no quedó ningún resto en el árbol de trabajo (confirmado con `git status`).
+
+Resultados, a dos anchos de viewport móvil (360px y 320px, el mínimo habitual tipo iPhone SE):
+
+- **ANTES** (`<ion-title>{{ title }} — {{ fuelLabel }}</ion-title>`, sin cambios): `getComputedStyle` del `div.toolbar-title` interno confirma `textOverflow: 'ellipsis'`, `whiteSpace: 'nowrap'`, y **medición real de desbordamiento**: `scrollWidth: 450` vs `clientWidth: 284` (360px) / `244` (320px) — el texto SÍ se corta visualmente, no es una sospecha. Captura de pantalla: `"Evolución general de tus fav…"`, exactamente el síntoma descrito.
+- **DESPUÉS** (con el fix): `whiteSpace: 'normal'` en el mismo nodo interno; **ninguna línea desbordada** en ningún ancho probado (`scrollWidth === clientWidth` en título principal y en combustible); el toolbar crece de 56px a 77px a 320px (el título principal pasa a ocupar 2 líneas, 44px de alto en vez de 22px) sin recortar nada. Probado también el caso extremo ("Evolución de precio — REPSOL ESTACIÓN DE SERVICIO AUTOVÍA", una marca deliberadamente larguísima): tampoco se desborda, envuelve a 3 líneas. Captura de pantalla: título y combustible completos y legibles en ambos casos (individual y general).
+
+---
+
+## Auditoría [REVIEWER]: título de la gráfica sin truncar
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/components/price-chart-modal/price-chart-modal.component.html`
+- `src/app/components/price-chart-modal/price-chart-modal.component.scss`
+
+### 1. ¿El título se ve completo en móvil, sin puntos suspensivos, en ambos casos (individual y general)?
+
+- [x] **Confirmado con medición real del navegador (Playwright + componentes reales de Ionic), no solo lectura de código:** `scrollWidth === clientWidth` en ambas líneas tras el fix, a 360px y 320px de ancho — cero desbordamiento. El caso ANTES, reproducido con el mismo mecanismo, sí mostraba `scrollWidth > clientWidth` (corte real), confirmando que la prueba detecta correctamente la diferencia (no es un falso negativo por una prueba que no discrimina).
+- [x] **Caso general y caso individual cubiertos por el MISMO componente** (`PriceChartModalComponent`, único consumido por `openStationHistory` y `openGeneralHistory` en `favorites-panel.page.ts`) — un solo fix arregla ambos, no hace falta duplicar lógica.
+- [x] **Caso extremo (nombre de gasolinera excepcionalmente largo) probado explícitamente, no solo el caso típico** — envuelve a una tercera línea sin desbordar, gracias a `overflow-wrap: break-word` como red de seguridad además de la división en dos líneas.
+- [x] **Accesible sin interacción adicional:** el texto completo está siempre en el DOM y siempre visible (a diferencia de la solución descartada de "mostrarlo en un tooltip al mantener pulsado", que no es descubrible ni estándar en móvil) — cumple el criterio explícito del encargo ("hay que escoger la solución más profesional... para poder ver el título completo").
+
+**Veredicto punto 1: correcto, confirmado empíricamente con el mecanismo real de Ionic, en ambos casos de uso y en un caso extremo adicional.**
+
+### 2. ¿Sigue siendo *theme-aware* (claro/oscuro) y consistente con el resto de la app?
+
+- [x] **`.price-chart-modal__title-fuel` usa `var(--ion-color-medium)`**, la misma variable de Ionic ya usada en el resto de la app para texto secundario (ej. `.price-chart-modal__empty` en el mismo archivo) — no un color fijo nuevo.
+- [x] **`.price-chart-modal__title-main` no fija ningún color** — hereda el `color` que `ion-title`/`ion-toolbar` ya resuelven de forma *theme-aware* (variable `--color` de Ionic), sin introducir un valor hexadecimal propio que pudiera desentonar en modo oscuro.
+- [x] **Sin nuevas fuentes/pesos ajenos a la escala tipográfica ya usada en la app** (1.0625rem/600 y 0.8125rem/400 son valores intermedios coherentes con el resto de tamaños ya vistos en la hoja de estilos del proyecto, no una escala nueva importada).
+
+**Veredicto punto 2: correcto, sin regresión de tema ni inconsistencia visual.**
+
+### Otras comprobaciones realizadas
+
+- [x] **`npx tsc --noEmit`**, **`npm run lint`** y **`ng build --configuration development`** ejecutados sobre el estado final: sin errores.
+- [x] **Sin fugas de memoria ni cambios de comportamiento fuera de la plantilla/estilos del título** — el diff se limita al marcado del `<ion-title>` y a las reglas SCSS de las dos líneas nuevas; `PriceChartModalComponent.ts` (lógica de datos/gráfica) no se tocó.
+- [x] **Sin APIs de pago ni cambios de costes.** Cambio puramente visual/CSS, sin ninguna llamada a Firestore/Cloud Functions nueva.
+- [x] **Infraestructura de prueba temporal (dos HTML + servidor estático local) eliminada/detenida antes de cerrar esta auditoría** — confirmado con `git status` que el único cambio real en el árbol de trabajo son los dos archivos de la corrección.
+
+### Veredicto final
+
+**Aprobado para commit.** El título truncado sin forma de leerse (bug reportado, reproducido y medido con el mecanismo real de Ionic) se corrige usando la variante oficial de Ionic para títulos que envuelven (`size="small"`, la única palanca posible dado que `ion-title` no expone ningún `::part()` sobre el nodo que trunca), con una jerarquía visual propia de dos líneas en vez de la cadena concatenada anterior, y una red de seguridad (`overflow-wrap: break-word`) para el caso extremo de un nombre excepcionalmente largo. Verificado empíricamente en dos anchos de viewport móvil y en el caso típico y el extremo: cero desbordamiento en todos los casos probados, frente al corte real medido en el estado anterior. Sin hallazgos bloqueantes.

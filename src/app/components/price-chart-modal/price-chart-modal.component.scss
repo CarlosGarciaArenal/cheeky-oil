@@ -1,3 +1,39 @@
+/*
+ * Título del modal: envuelve en varias líneas en vez de truncarse con "…".
+ * `ion-title` usa Shadow DOM real (`encapsulation: 'shadow'`, verificado en
+ * `node_modules/@ionic/core/.../title.js`) y su `div.toolbar-title` interno
+ * (el que aplica `white-space: nowrap` + `text-overflow: ellipsis` por
+ * defecto) no expone ningún `::part()` — no hay ninguna forma de
+ * sobreescribir ESE nodo concreto desde fuera del componente. `size="small"`
+ * (en la plantilla) es la única variante que el propio Ionic ya implementa
+ * con `white-space: normal` para ese caso — se usa aquí solo por ese
+ * comportamiento; el tamaño/peso de fuente por defecto de esa variante se
+ * sobreescribe abajo, porque los `<span>` de dentro son contenido "slotted"
+ * (DOM normal de este componente, no Shadow DOM de Ionic) y admiten CSS
+ * propio sin restricción.
+ */
+.price-chart-modal__title {
+  padding-block: 8px;
+}
+
+.price-chart-modal__title-main {
+  display: block;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/** Combustible en línea propia, más pequeño y con el color "medium" (theme-aware, claro/oscuro) — separado del nombre de la gasolinera en vez de concatenado con un guión, para que ninguno de los dos textos tenga que compartir línea con el otro. */
+.price-chart-modal__title-fuel {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--ion-color-medium);
+}
+
 .price-chart-modal__wrapper {
   padding: 16px;
   height: 100%;
