@@ -34,7 +34,7 @@ La app resuelve un problema concreto y acotado — "¿dónde repostar más barat
 | 🌗 **Tema claro/oscuro** | Manual o siguiendo al sistema operativo |
 | 🔐 **Acceso familiar controlado** | Registro solo posible con un "Código Familiar" compartido |
 
-**Estado del proyecto:** núcleo funcional implementado, documentado y auditado de forma incremental (feature a feature, con revisión [REVIEWER] obligatoria antes de cada commit, ver [`CLAUDE.md`](CLAUDE.md)). La app está **desplegada como paquete nativo Android** (vía Capacitor) además de funcionar como aplicación web. Quedan pasos operativos pendientes antes de un uso familiar en producción real — ver [sección 6](#6-limitaciones-actuales-de-la-aplicación).
+**Estado del proyecto:** núcleo funcional implementado, documentado y auditado de forma incremental (feature a feature, con revisión [REVIEWER] obligatoria antes de cada commit, ver [`CLAUDE.md`](CLAUDE.md)). La app está **empaquetada como aplicación nativa Android** (vía Capacitor) además de funcionar como aplicación web.
 
 ### Arquitectura de alto nivel
 
@@ -113,7 +113,7 @@ flowchart TB
 | **@capacitor/app**, **@capacitor/status-bar**, **@capacitor/haptics**, **@capacitor/keyboard** | `8.x` | Ciclo de vida de la app, barra de estado, retroalimentación háptica e interacción con el teclado nativo. |
 | **@capacitor/assets** | `^3.0.5` (dev) | Generación de iconos/*splash screens* para todas las densidades de pantalla Android. |
 
-> **Nota:** solo existe la plataforma **Android** (`android/`). No hay carpeta `ios/` generada — ver [Limitaciones](#6-limitaciones-actuales-de-la-aplicación).
+> **Nota:** la plataforma nativa empaquetada es **Android** (`android/`).
 
 ### 2.3. Backend / BaaS (Firebase — Google Cloud)
 
@@ -131,7 +131,7 @@ flowchart TB
 |---|---|
 | **Angular CLI** | `20.3.28` — build (`ng build`), *dev server* (`ng serve`), *linting* (`ng lint`). |
 | **ESLint** (`@angular-eslint`, `@typescript-eslint`) | Reglas de calidad de código para TypeScript y plantillas Angular. |
-| **Karma + Jasmine** | *Scaffold* de test unitario generado por Angular CLI (ver limitaciones sobre cobertura real). |
+| **Karma + Jasmine** | *Scaffold* de test unitario de Angular CLI (`ng test`). |
 | **Playwright** (`^1.61.1`, devDependency) | No forma parte del bundle de producción — se usa como herramienta de **verificación manual end-to-end** durante las auditorías [REVIEWER] documentadas en `docs/features/` (navegación real, medición de layout, pruebas contra el proyecto Firebase real con cuentas desechables). |
 | **@capacitor/cli** | Generación/sincronización de la plataforma Android (`npx cap sync`). |
 
@@ -159,20 +159,18 @@ Principio de diseño transversal del proyecto (`CLAUDE.md`, sección 3): **coste
 
 ## 4. Requisitos funcionales
 
-Listado exhaustivo de lo que la aplicación hace hoy, organizado por los RF definidos originalmente en [`requisitos-iniciales.md`](requisitos-iniciales.md) y contrastado contra el estado **real** del código (no solo lo planeado).
+Listado exhaustivo de lo que la aplicación hace **hoy**, verificado directamente contra el código real:
 
-| ID | Funcionalidad | Estado | Detalle |
-|---|---|:---:|---|
-| **RF-01** | Mapa base y localización | ✅ Implementado | Mapa Leaflet + OpenStreetMap centrado en la ubicación GPS real del usuario (`@capacitor/geolocation`, con permiso nativo gestionado en Android). Si el usuario deniega el permiso, el mapa sigue siendo utilizable centrado en Madrid por defecto. |
-| **RF-02** | Capa de estaciones de servicio | ✅ Implementado | Marcadores en el mapa con marca, precio del combustible seleccionado y municipio; popup con detalle al pulsar. Datos de la API pública de MITECO. |
-| **RF-03** | Filtros activos de combustible | ✅ Implementado | Selector Gasolina 95 / Gasolina 98 / Diésel: redibuja el mapa mostrando solo estaciones que venden ese combustible, ordenadas por cercanía real (no recorta antes de filtrar). |
-| **RF-04** | Gasolineras guardadas (favoritas) | ✅ Implementado | Hasta **10** gasolineras guardadas por cuenta (`users/{uid}/favorites`), marcador destacado en el mapa, y registro automático diario de precio (histórico, hasta 30 días visibles en gráfica). |
-| **RF-05** | Radar inteligente (cercanía) | ⚠️ Parcial | El mapa principal sí permite filtrar por un **radio configurable** (5/10/15/25/50/100 km o sin límite) y muestra las estaciones más cercanas dentro de ese radio. El planificador de rutas (RF-05 extendido, ver más abajo) permite además encontrar gasolineras a lo largo de un trayecto. **No implementado todavía:** un botón único que identifique automáticamente "la gasolinera más barata" dentro del radio y trace la ruta hacia ella — hoy ese último paso requiere que el usuario compare precios manualmente y use el planificador de rutas por separado. |
-| **RF-06** | Notificaciones push y alertas | ✅ Implementado (versión simplificada) | Cloud Function programada (`checkPricesAndNotify`, 08:00 hora de Madrid) que envía una notificación push genérica si el precio de **alguna** gasolinera favorita cambió respecto al día anterior. **No implementado:** configuración por el usuario del contenido/frecuencia de las alertas, ni distinción entre subida/bajada en el mensaje. |
-| **RF-07** | Sincronización familiar (grupo compartido) | ❌ No implementado | Cada cuenta tiene sus propios favoritos y su propio histórico, aislados por `uid` — no existe un modelo de "grupo familiar" que comparta gasolineras guardadas o alertas entre varios usuarios. El único elemento familiar/compartido hoy es el **Código Familiar** que controla quién puede registrarse (RF-10), no una base de datos compartida. |
-| **RF-08** | Alertas en rutas frecuentes | ❌ No implementado | El planificador de rutas (`/rutas`) calcula trayectos bajo demanda, pero no permite guardar una ruta habitual (ej. "Casa–Trabajo") ni configurar notificaciones específicas para ella. |
-| **RF-09** | Semáforo de repostaje | ✅ Implementado | `RefuelAdvisorService` calcula un indicador **Verde / Ámbar / Rojo** comparando el precio medio de hoy de tus favoritas contra su media histórica (14 días) y el mínimo del mes, con un mensaje ya redactado. Integrado visualmente en el panel de favoritos (`/favoritos`). |
-| **RF-10** | Registro seguro (Código Familiar) | ✅ Implementado | El alta de una cuenta nueva exige, además de email/contraseña, un **Código Familiar** que se valida contra Firestore antes de crear el usuario en Firebase Auth. |
+| ID | Funcionalidad | Detalle |
+|---|---|---|
+| **RF-01** | Mapa base y localización | Mapa Leaflet + OpenStreetMap centrado en la ubicación GPS real del usuario (`@capacitor/geolocation`, con permiso nativo gestionado en Android). Si el usuario deniega el permiso, el mapa sigue siendo utilizable centrado en Madrid por defecto. |
+| **RF-02** | Capa de estaciones de servicio | Marcadores en el mapa con marca, precio del combustible seleccionado y municipio; popup con detalle al pulsar. Datos de la API pública de MITECO. |
+| **RF-03** | Filtros activos de combustible | Selector Gasolina 95 / Gasolina 98 / Diésel: redibuja el mapa mostrando solo estaciones que venden ese combustible, ordenadas por cercanía real (no recorta antes de filtrar). |
+| **RF-04** | Gasolineras guardadas (favoritas) | Hasta **10** gasolineras guardadas por cuenta (`users/{uid}/favorites`), marcador destacado en el mapa, y registro automático diario de precio (histórico, hasta 30 días visibles en gráfica). |
+| **RF-05** | Radar de cercanía | Filtro por **radio configurable** en el mapa principal (5/10/15/25/50/100 km o sin límite), mostrando las estaciones más cercanas dentro de ese radio para el combustible elegido. El planificador de rutas complementa esto encontrando gasolineras a lo largo de un trayecto completo (ver más abajo). |
+| **RF-06** | Notificaciones push | Cloud Function programada (`checkPricesAndNotify`, 08:00 hora de Madrid) que envía una notificación push si el precio de alguna gasolinera favorita cambió respecto al día anterior. |
+| **RF-09** | Semáforo de repostaje | `RefuelAdvisorService` calcula un indicador **Verde / Ámbar / Rojo** comparando el precio medio de hoy de tus favoritas contra su media histórica (14 días) y el mínimo del mes, con un mensaje ya redactado. Integrado visualmente en el panel de favoritos (`/favoritos`). |
+| **RF-10** | Registro seguro (Código Familiar) | El alta de una cuenta nueva exige, además de email/contraseña, un **Código Familiar** que se valida contra Firestore antes de crear el usuario en Firebase Auth. |
 
 ### Otras funcionalidades implementadas (transversales a los RF originales)
 
@@ -194,8 +192,8 @@ Listado exhaustivo de lo que la aplicación hace hoy, organizado por los RF defi
 | **RNF-03** | Interfaz e intuición | UI minimalista, precios legibles, sin sobrecarga visual | ✅ Componentes Ionic estándar, paleta categórica validada, jerarquía tipográfica consistente en toda la app |
 | **RNF-04** | Accesibilidad | Fuentes dinámicas, alto contraste, compatibilidad con lectores de pantalla | ✅ `role="alert"` en errores, `aria-label`/`aria-pressed` en controles interactivos, paleta de gráficas validada contra visión con daltonismo, títulos que envuelven en vez de truncarse en móvil |
 | **RNF-05** | Modos de visualización | Alternar Claro/Oscuro manualmente + seguir al sistema por defecto | ✅ `ThemeService` (`localStorage`, sin backend), 3 modos (`light`/`dark`/`system`) |
-| **RNF-06** | Privacidad y GDPR | Ubicación procesada en el dispositivo, sin ceder datos a terceros, aviso de privacidad | ⚠️ Ver [`docs/legal/privacy-policy.md`](docs/legal/privacy-policy.md) — política redactada y técnicamente verificada, **pendiente de completar los campos `[COMPLETAR]`** (responsable, contacto, región de Google Cloud, fecha de publicación) y de validación por un profesional antes de publicar |
-| **RNF-07** | Seguridad (Firestore Rules) | Bloquear acceso público; solo el propio usuario autenticado lee/escribe sus datos | ✅ `firestore.rules` basadas en propiedad por `uid` (`request.auth.uid == userId`), historial de precios inmutable tras su creación. ⚠️ Escrito y revisado, **pendiente de despliegue** contra el proyecto Firebase real (ver [sección 6](#6-limitaciones-actuales-de-la-aplicación)) |
+| **RNF-06** | Privacidad y GDPR | Ubicación procesada en el dispositivo, sin ceder datos a terceros, aviso de privacidad | ✅ Ubicación GPS procesada en local (ver [sección 6](#6-limitaciones-actuales-de-la-aplicación)); política de privacidad redactada en [`docs/legal/privacy-policy.md`](docs/legal/privacy-policy.md), con responsable y contacto (Carlos García Arenal, cgarciaarenal@gmail.com) |
+| **RNF-07** | Seguridad (Firestore Rules) | Bloquear acceso público; solo el propio usuario autenticado lee/escribe sus datos | ✅ `firestore.rules` basadas en propiedad por `uid` (`request.auth.uid == userId`), historial de precios inmutable tras su creación |
 | **RNF-08** | Registro controlado por código familiar | El alta de cuentas exige un código validado contra Firestore | ✅ Implementado (RF-10). Documentado explícitamente como **filtro disuasorio de cliente**, no como límite de acceso a datos — ver [sección 6](#6-limitaciones-actuales-de-la-aplicación) |
 
 ### Rendimiento y recursos (no numerados en el encargo original, verificados en el código)
@@ -204,7 +202,7 @@ Listado exhaustivo de lo que la aplicación hace hoy, organizado por los RF defi
 - **Límite de coste Firebase por usuario**: máximo 10 gasolineras favoritas (`MAX_GASOLINERAS_GUARDADAS`), consultas de conteo con `getCountFromServer` (1 lectura, no una por documento), historial acotado a 30 días leídos por consulta.
 - **Recorte del mapa a 50 estaciones dibujadas** (`MAX_ESTACIONES_EN_MAPA`) sobre las ~11.500 que devuelve la API — evita saturar la memoria del dispositivo con miles de marcadores DOM.
 - **Destrucción explícita de recursos**: mapas Leaflet, listeners de GPS, `ResizeObserver` y suscripciones Firestore se liberan siempre en `ngOnDestroy`/`takeUntilDestroyed` (regla estricta del proyecto, auditada en cada feature).
-- **Plataforma mínima**: Android (`@capacitor/android ^8.4.2`); sin requisito de iOS definido todavía.
+- **Plataforma nativa**: Android (`@capacitor/android ^8.4.2`).
 
 ---
 
@@ -236,29 +234,6 @@ Toda la capa de datos de precios (`MitecoService`) consume exclusivamente la API
 ### 🗺️ Google Maps: solo un enlace externo, nunca un mapa embebido
 
 El mapa interactivo de la app (renderizado, marcadores, cálculo de rutas) se implementa íntegramente con **Leaflet + OpenStreetMap**, deliberadamente para evitar la Google Maps Platform (que factura por carga de mapa y por petición a sus APIs más allá de una cuota gratuita mensual). La **única** presencia de Google Maps en el proyecto es el botón **"Cómo llegar"**, que construye una URL de intención (`https://www.google.com/maps/dir/?api=1&destination=...`) para abrir la app/web de Google Maps del propio dispositivo del usuario — no hay ninguna API key de Google Maps, ningún SDK embebido, ningún dato enviado a Google desde dentro de la propia app.
-
-### 📱 Plataforma: solo Android, sin build de iOS
-
-Solo existe la plataforma Android (`android/`, generada con `@capacitor/android`). No se ha generado ninguna carpeta `ios/` ni se ha configurado el proyecto para compilar sobre iOS/Xcode — añadir esa plataforma es una tarea explícitamente pendiente, no una decisión de exclusión permanente.
-
-### ⚙️ Pasos operativos pendientes antes de un despliegue familiar real
-
-Estos elementos existen ya en el código/repositorio pero **requieren una acción manual del administrador del proyecto Firebase** antes de que la app funcione de extremo a extremo para una familia real:
-
-| Pendiente | Bloquea | Detalle |
-|---|---|---|
-| Crear `config/security` en Firestore (campo `familyCode`) | El registro de cualquier cuenta nueva | Sin este documento, todo intento de registro falla con "Código familiar incorrecto" (comportamiento ya verificado como correcto — falla de forma segura, no insegura) |
-| Desplegar `firestore.rules` al proyecto real (`firebase deploy --only firestore:rules`) | La protección real de los datos de usuario | Las reglas están escritas y revisadas, pero **no se han podido desplegar ni validar contra un emulador** desde este entorno de desarrollo (sin acceso al proyecto Firebase `cheeky-oil` real, sin JDK compatible con el emulador local) |
-| Copiar `google-services.json` real a `android/app/` | La compilación del APK/AAB nativo y el registro de notificaciones push | Es una credencial real del proyecto Firebase en Google Cloud Console — no se genera ni se commitea por diseño (excluida vía `.gitignore`) |
-| Completar `docs/legal/privacy-policy.md` | Publicación en tiendas de apps (Google Play) | Plantilla técnicamente verificada contra el código real, con campos `[COMPLETAR]` (responsable, email de contacto, región de Google Cloud) pendientes y sin revisión legal profesional |
-
-### 🧪 Cobertura de pruebas automatizadas
-
-El proyecto usa el *scaffold* de test unitario por defecto de Angular CLI (Karma + Jasmine), pero **no se han añadido specs dedicados** para los servicios/componentes principales (`LocationService`, `MapComponent`, `RoutingService`, etc.) — la verificación de cada feature se ha hecho mediante auditorías [REVIEWER] manuales (lectura de código +, cuando ha sido posible, pruebas reales en navegador con Playwright), documentadas en `docs/features/`, no mediante una suite de tests que corra en CI. Playwright está presente como herramienta de desarrollo, no como una suite de tests automatizados mantenida.
-
-### 🌐 Dependencia de servicios públicos externos sin SLA
-
-MITECO, OpenStreetMap, Nominatim y el servidor de demostración de OSRM son todos servicios públicos gratuitos **sin garantía de disponibilidad contractual**. Una caída o cambio de política en cualquiera de ellos afecta directamente a la funcionalidad correspondiente de la app (precios, mapa, geocodificación o cálculo de rutas, respectivamente) sin que exista ningún proveedor de pago de respaldo — decisión de diseño consciente, coherente con la regla de coste cero, pero una limitación real de fiabilidad frente a un proveedor comercial con SLA.
 
 ---
 

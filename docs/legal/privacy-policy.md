@@ -2,13 +2,13 @@
 
 > ⚠️ **Nota de alcance (léase antes de publicar):** este documento es una plantilla redactada conforme a los principios del Reglamento General de Protección de Datos (RGPD/GDPR) y a los requisitos habituales de Apple App Store y Google Play, elaborada a partir de un análisis técnico real del código de la app (qué datos se recogen, a qué servicios se envían y por qué). **No sustituye el asesoramiento de un abogado especializado en protección de datos.** Antes de publicar la app, revisa especialmente los campos marcados como `[COMPLETAR]` y confirma con un profesional que el documento se ajusta a tu situación concreta (por ejemplo, si en algún momento monetizas la app, añades publicidad, o cambias de proveedor de backend).
 
-**Última actualización:** `[COMPLETAR: fecha de publicación]`
+**Última actualización:** 18 de julio de 2026
 
 ## 1. Responsable del tratamiento
 
 - **Aplicación:** Cheeky Oil (app móvil personal/familiar de comparación y seguimiento de precios de combustible en España).
-- **Responsable:** `[COMPLETAR: tu nombre o el de la persona/entidad titular de la app]`
-- **Contacto para cuestiones de privacidad:** `[COMPLETAR: email de contacto]`
+- **Responsable:** Carlos García Arenal
+- **Contacto para cuestiones de privacidad:** cgarciaarenal@gmail.com
 
 Cheeky Oil es una aplicación de uso personal y familiar, sin finalidad comercial ni publicitaria. Esta política describe qué datos personales trata la app, con qué finalidad, con quién se comparten y qué derechos tienes sobre ellos.
 
@@ -70,13 +70,13 @@ Como usuario, tienes derecho a:
 - **Portabilidad**: solicitar tus datos en un formato estructurado y de uso común.
 - **Retirar tu consentimiento** en cualquier momento (por ejemplo, revocando el permiso de ubicación), sin que ello afecte a la licitud del tratamiento previo.
 
-Para ejercer cualquiera de estos derechos, escribe a `[COMPLETAR: email de contacto]`. Responderemos en el plazo máximo de un mes, conforme al artículo 12.3 del RGPD.
+Para ejercer cualquiera de estos derechos, escribe a cgarciaarenal@gmail.com. Responderemos en el plazo máximo de un mes, conforme al artículo 12.3 del RGPD.
 
 Si consideras que el tratamiento de tus datos no se ajusta a la normativa, tienes derecho a **presentar una reclamación ante la Agencia Española de Protección de Datos (AEPD)** — [www.aepd.es](https://www.aepd.es) — o ante la autoridad de control de tu país de residencia si resides en otro Estado miembro de la UE.
 
 ## 9. Eliminación de tu cuenta y tus datos
 
-Puedes solicitar la eliminación completa de tu cuenta y de todos los datos asociados (email, favoritos, histórico de precios) escribiendo a `[COMPLETAR: email de contacto]` desde el email asociado a tu cuenta. Procesaremos la solicitud y eliminaremos tus datos de forma permanente en un plazo máximo de 30 días.
+Puedes solicitar la eliminación completa de tu cuenta y de todos los datos asociados (email, favoritos, histórico de precios) escribiendo a cgarciaarenal@gmail.com desde el email asociado a tu cuenta. Procesaremos la solicitud y eliminaremos tus datos de forma permanente en un plazo máximo de 30 días.
 
 > **Nota interna, no parte del texto legal publicado:** en el momento de escribir este documento, la app **no dispone todavía de una opción de autoservicio "Eliminar mi cuenta" dentro de la propia interfaz** — el borrado se gestiona hoy manualmente, bajo petición, por quien administra el proyecto. Esto es compatible con el RGPD (que no exige que el borrado sea instantáneo ni self-service, solo que se atienda en un plazo razonable), **pero Apple App Store exige explícitamente** (App Store Review Guideline 5.1.1(v)) que cualquier app que permita crear una cuenta también ofrezca una forma de eliminarla **dentro de la propia app**, no solo por contacto externo. Si el destino de publicación incluye Apple App Store, hay que añadir esa función a la app antes de enviarla a revisión — Google Play es, en este aspecto concreto, menos estricto (permite un proceso externo siempre que esté enlazado y documentado), pero también recomienda el autoservicio.
 
@@ -94,4 +94,4 @@ Podemos actualizar esta política de privacidad para reflejar cambios en la app 
 
 ## 13. Contacto
 
-Para cualquier duda sobre esta política de privacidad o sobre el tratamiento de tus datos: `[COMPLETAR: email de contacto]`.
+Para cualquier duda sobre esta política de privacidad o sobre el tratamiento de tus datos: cgarciaarenal@gmail.com.
