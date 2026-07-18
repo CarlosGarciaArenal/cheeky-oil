@@ -431,3 +431,88 @@ classDiagram
 - [REVIEWER] (futuro): revisar cobertura de tests unitarios de `LocationService`/`MapComponent` cuando se añadan.
 - [Usuario]: confirmar en un dispositivo/navegador real, con sesión iniciada, que volver de `/favoritos` a `/home` ya no rompe el mapa (la verificación de esta corrección fue del mecanismo de Leaflet en aislado, no un recorrido logueado de la app real — ver justificación en la sección de Verificación de arriba).
 - [Usuario]: confirmar en un dispositivo/emulador Android real que, tras la migración a `@capacitor/geolocation`, aparece el diálogo nativo de permiso de ubicación y el mapa se centra correctamente en el fix de GPS (ver pendiente ⚠️ de la auditoría "migración a `@capacitor/geolocation`" — no verificable desde este entorno de desarrollo).
+
+---
+
+## Corrección: el diálogo de permiso no aparecía "al entrar por primera vez" (permiso pedido de forma proactiva al arrancar)
+
+**Rol:** [ARQUITECTO]
+**Estado:** Corregido
+**Archivos modificados:**
+- `src/app/core/services/location.service.ts`
+- `src/app/app.component.ts`
+
+### El problema
+
+Reportado por el usuario tras probar la corrección anterior en un dispositivo Android real: la app no mostraba el diálogo nativo de "Permitir que Cheeky Oil acceda a la ubicación de este dispositivo" — y si el permiso no se activaba manualmente desde Ajustes del sistema, la app se quedaba sin funcionar (mapa sin centrar, sin gasolineras cercanas).
+
+Causa de diseño (no un bug de la migración anterior, que sigue siendo correcta): el ÚNICO punto de la app que pedía el permiso de ubicación era `MapComponent.ngAfterViewInit()`, al llamar a `locationService.getCurrentPosition()` — es decir, el diálogo solo podía aparecer la primera vez que el usuario, ya autenticado, llegaba a `/home`. Pedir el permiso "en contexto" (solo cuando la funcionalidad que lo necesita se usa por primera vez) es en general una buena práctica de UX, pero el usuario pidió explícitamente lo contrario: que el diálogo aparezca "al entrar por primera vez a la app", no en un punto posterior y condicionado a haber iniciado sesión y a que `MapComponent` llegue a montarse.
+
+### La corrección
+
+`AppComponent` (la raíz de la app, se construye siempre, con o sin sesión) pide el permiso de ubicación en su propio constructor, de forma proactiva y desacoplada de si hay sesión iniciada — a diferencia del bloque de notificaciones push (que sí espera a `currentUser()`, porque ese token necesita asociarse a un `uid`; el permiso de ubicación no):
+
+```ts
+void this.locationService.requestPermissions();
+```
+
+`LocationService.requestPermissions()` (método nuevo) llama a `Geolocation.requestPermissions()` del propio `@capacitor/geolocation` (ya en uso), envuelto en `Capacitor.isNativePlatform()` (no-op en web, donde el plugin no implementa este método) y en un `try/catch` que solo registra el error (p. ej. si los servicios de ubicación del sistema están desactivados) sin romper el arranque de la app.
+
+1. **No sustituye la petición de permiso ya existente dentro de `getCurrentPosition()`/`watchPosition()`, la complementa.** Si esta llamada de arranque fallara por cualquier motivo (excepción no prevista, timing de la plataforma nativa), `MapComponent` sigue pidiendo el permiso por su cuenta al llegar a `/home`, exactamente igual que antes — misma robustez de doble camino que se comprobó necesaria en la corrección anterior de `watchPosition()`.
+2. **Sin gating a `currentUser()` (a diferencia de las push notifications).** El permiso de ubicación no necesita guardarse en Firestore asociado a ningún usuario — pedirlo antes del login no tiene ninguna contrapartida negativa, y es justo lo que se pidió ("al entrar por primera vez a la app", no "al entrar al mapa ya autenticado").
+3. **Sin flag de "ya solicitado".** El bloque de push SÍ necesita un flag (`pushInitialized`) porque vive dentro de un `effect()` que se reevalúa cada vez que `currentUser()` cambia (logout→login repetido en la misma sesión de la app). Esta llamada vive directamente en el constructor de `AppComponent`, que se ejecuta una única vez por instancia — y `AppComponent`, al ser la raíz del árbol, prácticamente nunca se destruye/recrea durante una sesión.
+4. **Mensaje de "permiso denegado" reescrito para ser accionable.** Antes: "Permiso de ubicación denegado por el usuario." — cierto, pero sin ninguna salida para el usuario. Ahora indica explícitamente la ruta de Ajustes del sistema (Ajustes → Aplicaciones → Cheeky Oil → Permisos → Ubicación) para los casos en que Android ya no vuelve a mostrar su propio diálogo (ver limitación de plataforma, siguiente punto).
+
+### Limitación real de plataforma (no arreglable con código, hay que saberlo antes de volver a probar)
+
+Android **deja de mostrar el diálogo de permiso automáticamente** una vez el usuario lo ha denegado dos veces (o ha marcado "No volver a preguntar") — a partir de ahí, ninguna llamada desde la app (`requestPermissions()`, `getCurrentPosition()`, ni ningún otro mecanismo) puede volver a forzar ese diálogo del sistema operativo; solo se reactiva si el usuario lo activa a mano en Ajustes, o si se borran los datos de la app / se reinstala (lo que resetea el estado de permisos desde cero). **Si el dispositivo de prueba ya denegó el permiso en una instalación anterior de la app (muy probable, dado que así es como se detectó este problema), esta corrección no hará aparecer el diálogo en ese mismo dispositivo/instalación** — hay que o bien reinstalar la app, o bien activar el permiso una vez a mano, para volver a partir de un estado limpio en el que probar que el diálogo aparece solo la próxima vez.
+
+---
+
+## Auditoría [REVIEWER]: permiso de ubicación pedido al arrancar
+
+**Rol:** [REVIEWER]
+**Archivos auditados:**
+- `src/app/core/services/location.service.ts`
+- `src/app/app.component.ts`
+
+### Hallazgo de esta auditoría (corregido antes de aprobar)
+
+⚠️→✅ **Dos peticiones de permiso nativas podían quedar en curso a la vez contra el mismo plugin, con riesgo real de que la respuesta de una se entregara a la promesa de JS de la otra.** La propuesta inicial de [ARQUITECTO] hacía que `AppComponent` pidiera el permiso en su constructor (sin esperar a `MapComponent`), pero `getCurrentPosition()`/`watchPosition()` seguían disparando su propia petición de permiso de forma independiente si `MapComponent`/`RoutePlannerPage` llegaban a montarse antes de que esa primera petición terminara (caso real y nada raro: una sesión de Firebase ya persistida hace que `authGuard` resuelva y `/home` se monte muy rápido tras el arranque).
+
+Verificado leyendo el código fuente real de Capacitor Android (`node_modules/@capacitor/android/capacitor/.../Plugin.java`, `Bridge.java`), no solo por sospecha de timing:
+- `Bridge.savePermissionCall(call)` guarda cada `PluginCall` pendiente de un resultado de permiso en una cola (`savedPermissionCallIds`) indexada **únicamente por `pluginId`** ("Geolocation"), en una lista FIFO compartida por TODAS las peticiones de permiso de ese plugin, sin importar desde qué método nativo se originaron.
+- `AppComponent`'s `Geolocation.requestPermissions()` usa el callback nativo genérico `checkPermissions` (heredado de la clase base `Plugin`); `getCurrentPosition()`/`watchPosition()` usan sus propios callbacks `completeCurrentPosition`/`completeWatchPosition` (definidos en `GeolocationPlugin.kt`) — **tres `ActivityResultLauncher` distintos**, cada uno registrado por separado.
+- `triggerPermissionCallback(method, ...)` (el punto donde Android entrega el resultado) hace `bridge.getPermissionCall(pluginId)` → `.poll()` sobre esa cola COMPARTIDA, y ejecuta el `method` asociado al launcher que disparó el evento **sobre el `PluginCall` que salga primero de la cola** — que no tiene por qué ser el que originó ESE launcher concreto si hay más de una petición en curso. Con dos peticiones simultáneas, el resultado de una puede entregarse al callback (y por tanto a la promesa de JS) de la OTRA.
+- Consecuencia práctica si esto llegara a darse: la promesa de `AppComponent.requestPermissions()` podría resolverse con el resultado de un intento de lectura de posición (o viceversa), y la llamada que se quedó sin su propio evento de resultado **jamás se resolvería** — un `getCurrentPosition()` colgado para siempre en `MapComponent`, sin error ni timeout visible, justo el tipo de fallo silencioso que peor experiencia de usuario da.
+
+**Corrección aplicada en esta misma auditoría:** se añadió `LocationService.pendingPermissionRequest` (una única promesa compartida) y `ensurePermissionRequest()`, por los que pasan ahora `requestPermissions()`, `getCurrentPosition()` y `watchPosition()` — si ya hay una petición de permiso en curso, las demás ESPERAN esa misma promesa antes de tocar el plugin nativo, en vez de lanzar la suya en paralelo. Esto garantiza que nunca hay más de una petición de permiso nativa en vuelo a la vez para este plugin, cerrando el hueco de cruce de la plataforma. Re-verificado `tsc --noEmit`/`npm run lint`/`ng build` tras el fix: sin errores.
+
+### 1. ¿Sigue funcionando el camino normal (permiso ya concedido, o primera vez sin conflicto)?
+
+- [x] **Sin ninguna petición de permiso pendiente (caso más común: permiso ya concedido de una sesión anterior), `getCurrentPosition()`/`watchPosition()` no añaden ninguna espera real** — `(this.pendingPermissionRequest ?? Promise.resolve())` resuelve en el siguiente microtask, sin tocar el plugin nativo de más ni introducir latencia perceptible.
+- [x] **En web, `pendingPermissionRequest` nunca llega a asignarse** (`requestPermissions()` corta con `return` antes de llamar a `ensurePermissionRequest()` si `!Capacitor.isNativePlatform()`), así que el comportamiento en navegador es idéntico al de antes de este ciclo — confirmado por lectura de código, cero diferencia de camino para web.
+- [x] **`MapComponent`/`RoutePlannerPage` no requirieron ningún cambio** — ambos siguen llamando a `getCurrentPosition()` con la misma firma pública; la serialización es interna a `LocationService`.
+
+**Veredicto punto 1: correcto, sin regresión en el camino ya auditado.**
+
+### 2. ¿Queda algún watcher/promesa sin limpiar por la nueva espera añadida?
+
+- [x] **`watchPosition()` comprueba `cancelled` justo al resolver la espera del permiso, antes de llamar a `Geolocation.watchPosition(...)`.** Sin esta comprobación, un `Observable` desuscrito MIENTRAS se esperaba el permiso (compartido con otra llamada que pudiera tardar, ej. el usuario tardando en responder al diálogo del sistema) habría arrancado un watcher real después de que su propia función de teardown ya se hubiera ejecutado con `watchId` todavía en `null` — un watcher de GPS huérfano, exactamente el tipo de fuga que este mismo archivo ya audita en otras correcciones. Con la comprobación, ese caso simplemente no llega a arrancar nada.
+- [x] **`getCurrentPosition()` no necesita el mismo guard**: no gestiona ningún recurso que limpiar en su teardown (no lo tenía antes de este ciclo tampoco — se completa o falla una única vez, sin watcher que huérfano quede).
+- [x] **`ensurePermissionRequest()` limpia `pendingPermissionRequest` en un `.finally()`**, tanto si `Geolocation.requestPermissions()` resuelve como si rechaza — no puede quedar "atascado" en `true` para siempre bloqueando futuras llamadas si la primera petición fallase.
+
+**Veredicto punto 2: correcto, la espera añadida no introduce ninguna fuga nueva.**
+
+### 3. Otras comprobaciones
+
+- [x] **Sin llamadas a Firestore/Cloud Functions**: cambio puramente de coordinación en el cliente entre llamadas al plugin `@capacitor/geolocation`, ya en uso — coste de Firebase = 0.
+- [x] **Sin dependencias nuevas**: se sigue usando exclusivamente `@capacitor/geolocation`, ya instalado y auditado.
+- [x] **`npx tsc --noEmit`, `npm run lint`, `ng build --configuration development`**: los tres pasan sin errores sobre el estado final (tras el fix de concurrencia, no solo sobre la propuesta inicial).
+- [ ] ⚠️ **No verificable de extremo a extremo desde este entorno** (mismo motivo que el resto de correcciones de geolocalización en este documento): reproducir la condición de carrera real requeriría un dispositivo/emulador Android con una sesión de Firebase ya persistida y medir el timing real de `authGuard`/Ionic al arrancar — la corrección se valida por lectura directa del código fuente de Capacitor (mecanismo real de la cola compartida, no documentación de terceros) y por el razonamiento de que serializar todas las llamadas en un único punto (`ensurePermissionRequest`) elimina estructuralmente la posibilidad de dos peticiones en vuelo, sin depender de reproducir el timing exacto.
+
+### Veredicto final
+
+**Aprobado para commit, con un hallazgo real corregido en esta misma auditoría.** La propuesta de [ARQUITECTO] resolvía correctamente el problema reportado (el diálogo no aparecía "al entrar por primera vez") pero introducía, sin quererlo, una nueva vía de fallo silencioso: dos peticiones de permiso nativas concurrentes contra el mismo plugin, con riesgo verificado (no solo sospechado) de que Capacitor entregara el resultado de una a la promesa de la otra, dejando la llamada perdedora colgada para siempre. Se corrigió serializando todas las llamadas que puedan disparar el diálogo de permiso a través de una única promesa compartida en `LocationService`, sin cambiar la interfaz pública que consumen `MapComponent`/`RoutePlannerPage` y sin coste de Firebase. Pendiente no bloqueante, ya señalado en la corrección de [ARQUITECTO]: confirmación manual del usuario en un dispositivo Android real, con la advertencia de que un permiso ya denegado en una instalación anterior no volverá a mostrar el diálogo hasta reinstalar la app o activarlo a mano.
+
+---

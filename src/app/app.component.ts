@@ -16,6 +16,7 @@ import { addIcons } from 'ionicons';
 import { logOutOutline, navigateOutline, starOutline } from 'ionicons/icons';
 
 import { AuthService } from './core/services/auth.service';
+import { LocationService } from './core/services/location.service';
 import { ThemeService } from './core/services/theme.service';
 
 @Component({
@@ -37,6 +38,7 @@ export class AppComponent {
    * inmediato, sin esperar a que ninguna otra vista lo inyecte primero.
    */
   private readonly themeService = inject(ThemeService);
+  private readonly locationService = inject(LocationService);
   private readonly destroyRef = inject(DestroyRef);
 
   /** Evita repetir el registro de push en cada reevaluación del `effect()` mientras la sesión sigue activa. */
@@ -46,6 +48,20 @@ export class AppComponent {
 
   constructor() {
     addIcons({ logOutOutline, navigateOutline, starOutline });
+
+    /**
+     * Permiso de ubicación (empaquetado nativo): se pide "al entrar por
+     * primera vez a la app" (pedido explícito del usuario, ver
+     * `docs/features/02-mapa-base.md`), no gated a `currentUser()` como el
+     * bloque de push de abajo — a diferencia del token FCM, el permiso de
+     * ubicación no necesita asociarse a ningún `uid`, así que no hay motivo
+     * para esperar a que exista sesión. Sin flag `already-requested`: al
+     * vivir en el constructor (no en un `effect()`), esta llamada ya
+     * ocurre una única vez por instancia de `AppComponent` — que, al ser
+     * la raíz del árbol, prácticamente nunca se destruye/recrea durante
+     * una sesión de la app.
+     */
+    void this.locationService.requestPermissions();
 
     /**
      * Push Notifications (empaquetado nativo, `[[12-push-notifications]]`).
